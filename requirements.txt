@@ -6,3 +6,8 @@ sentence-transformers==2.7.0
 datasets==2.18.0
 numpy==1.26.4
 transformers==4.40.0
+scikit-learn==1.4.2
+networkx==3.3
+evaluate==0.4.2
+openai==1.30.0
+requests==2.31.0
