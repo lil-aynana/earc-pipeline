@@ -50,10 +50,10 @@ CONFIG = dict(
 
     # Set to a small int (e.g. 1000) for a quick smoke-test
     max_rows = dict(
-        nq_passages = 10,
-        nq_answers  = 10,
-        hotpot      = 10,
-        trivia      = 10,
+        nq_passages = 5000,
+        nq_answers  = 5000,
+        hotpot      = 5000,
+        trivia      = 5000,
     ),
 )
 
