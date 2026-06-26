@@ -119,6 +119,105 @@ def save_progress(save_dir: Path, progress: Dict[str, Any]) -> None:
     log.info("progress.json updated  offsets=%s", progress["dataset_offsets"])
 
 
+# ─── OPTION-A AUTO-ROLLBACK ─────────────────────────────────
+#
+# Detects the "progress.json advanced but 0 chunks were written" state.
+# The symptom is: completed_batches == N but the newest shard in
+# manifest.json is empty (faiss_start == faiss_end). Two distinct causes
+# produce this same signature:
+#   (a) the old dedup bug, where cross-run dedup incorrectly skipped all
+#       documents in a batch; or
+#   (b) a mid-FAISS-encoding crash, where the run died after committing
+#       an empty shard placeholder but before finalize_run() completed.
+# Both are repaired identically, so one helper covers both. This MUST run
+# before check_corpus_integrity()/validate_manifest(), which would
+# otherwise hard-raise on this exact (recoverable) state.
+#
+# When detected, the function:
+#   1. Rolls progress.json offsets back to the start of the bad batch.
+#   2. Deletes doc_hashes.json so it is rebuilt with the corrected
+#      _hash_text function (which now includes dataset + row_idx).
+#   3. Removes the empty shard entry from manifest.json.
+#   4. Deletes the empty shard pkl files (chunks / metadata / qa_pairs)
+#      that were written for that batch.
+#
+# After rollback the normal startup continues and the repaired batch is
+# processed correctly on this same run.
+
+def _rollback_empty_batch_if_needed(
+    save_dir : Path,
+    progress : Dict[str, Any],
+    manifest : Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Check whether the most-recently committed batch produced 0 FAISS vectors
+    and, if so, roll it back so the batch is retried cleanly.
+
+    Returns (possibly-updated progress, possibly-updated manifest).
+    """
+    shards = manifest.get("shards", [])
+    if not shards:
+        return progress, manifest
+
+    # Sort by batch_idx so we always inspect the last committed shard.
+    last_shard = max(shards, key=lambda s: s["batch_idx"])
+    if last_shard["faiss_end"] > last_shard["faiss_start"]:
+        # Last shard has vectors — nothing to repair.
+        return progress, manifest
+
+    bad_batch_idx = last_shard["batch_idx"]
+    log.warning(
+        "AUTO-ROLLBACK: batch %d produced 0 FAISS vectors "
+        "(faiss_start == faiss_end == %d). "
+        "This was caused by the old _hash_text bug. Rolling back …",
+        bad_batch_idx, last_shard["faiss_start"],
+    )
+
+    # ── 1. Figure out what the offsets were BEFORE the bad batch ──────────
+    # Each dataset is processed batch_size rows per batch.  The bad batch
+    # advanced offsets by batch_size; subtract to get the prior offsets.
+    batch_size = CONFIG["batch_size"]
+    old_offsets = {
+        name: max(0, offset - batch_size)
+        for name, offset in progress["dataset_offsets"].items()
+    }
+    progress["dataset_offsets"]   = old_offsets
+    progress["completed_batches"] = bad_batch_idx          # back to N-1 done
+    progress["faiss_total_vectors"] = last_shard["faiss_start"]
+    # next_chunk_id doesn't change because 0 chunks were written.
+
+    # ── 2. Remove the empty shard from manifest ────────────────────────────
+    manifest["shards"] = [s for s in shards if s["batch_idx"] != bad_batch_idx]
+
+    # ── 3. Delete the stale shard pkl files for the bad batch ─────────────
+    for subdir, kind in [("chunks", "chunks"), ("metadata", "metadata"),
+                         ("qa_pairs", "qa")]:
+        p = _shard_path(save_dir, subdir, kind, bad_batch_idx)
+        if p.exists():
+            p.unlink()
+            log.info("AUTO-ROLLBACK: deleted stale shard %s", p.name)
+
+    # ── 4. Delete doc_hashes.json so it is rebuilt with the fixed hash ─────
+    hashes_path = save_dir / _DOC_HASHES_FILE
+    if hashes_path.exists():
+        hashes_path.unlink()
+        log.info(
+            "AUTO-ROLLBACK: deleted doc_hashes.json — it will be rebuilt "
+            "with the corrected _hash_text function this run."
+        )
+
+    # ── 5. Persist the repaired state ─────────────────────────────────────
+    save_progress(save_dir, progress)
+    save_manifest(save_dir, manifest)
+
+    log.info(
+        "AUTO-ROLLBACK complete: rolled back to offsets=%s, "
+        "completed_batches=%d. Re-running batch %d now.",
+        old_offsets, bad_batch_idx, bad_batch_idx,
+    )
+    return progress, manifest
+
+
 # ─── MANIFEST ───────────────────────────────────────────────
 
 MANIFEST_FILE = "manifest.json"
@@ -427,9 +526,15 @@ def get_dataset_lengths(
 _DOC_HASHES_FILE = "doc_hashes.json"
 
 
-def _hash_text(text: str) -> str:
-    """64-bit hex fingerprint of a document's leading 200 chars."""
-    return hashlib.md5(text[:200].encode("utf-8", errors="replace")).hexdigest()
+def _hash_text(text: str, dataset: str = "", row_idx: int = -1) -> str:
+    """
+    Fingerprint of a document keyed on dataset + row position + leading 200
+    chars.  Including dataset and row_idx prevents false-positive dedup when
+    two distinct rows share the same opening text (e.g. Wikipedia passages
+    that all start with the same article introduction).
+    """
+    key = f"{dataset}:{row_idx}:{text[:200]}"
+    return hashlib.md5(key.encode("utf-8", errors="replace")).hexdigest()
 
 
 def load_doc_hashes(save_dir: Path) -> Set[str]:
@@ -752,8 +857,8 @@ def create_documents(
         if local_key in seen_keys:
             return
         seen_keys.add(local_key)
-        # Cross-run check via persistent hash.
-        h = _hash_text(text)
+        # Cross-run check via persistent hash (keyed on dataset + row + text).
+        h = _hash_text(text, ds_name, global_row_idx)
         if h in seen_hashes:
             cross_run_skipped += 1
             return
@@ -1343,6 +1448,13 @@ def main() -> None:
     # ── FAISS load + crash-recovery reconciliation ────────────────────
     faiss_index = load_existing_faiss(save_dir, dim=model_dim)
     faiss_index = reconcile_faiss_with_manifest(faiss_index, manifest, save_dir)
+
+    # ── Auto-repair: roll back any empty batch left by the old dedup bug,
+    #    OR by a mid-FAISS-encoding crash (same on-disk signature: last
+    #    shard has faiss_start == faiss_end). Must run BEFORE the hard
+    #    integrity check below, which would otherwise raise on exactly
+    #    this recoverable state. ──────────────────────────────────────────
+    progress, manifest = _rollback_empty_batch_if_needed(save_dir, progress, manifest)
 
     # ── Full corpus integrity validation ──────────────────────────────
     check_corpus_integrity(save_dir, manifest, faiss_index, progress)
