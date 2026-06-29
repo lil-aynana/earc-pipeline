@@ -56,8 +56,12 @@ CONFIG = {
 
     # Models
     "embedding_model": "all-MiniLM-L6-v2",
-    "spacy_model":     "en_core_web_sm",
-    "llm_model":       "llama3",
+    "spacy_model": "en_core_web_sm",
+    "tokenizer_model": "bert-base-uncased",
+    "llm_model": "llama3",
+
+    # Reasoning
+    "reasoning_similarity_threshold": 0.78,
 
     # LLM
     "ollama_url":  "http://localhost:11434/api/generate",
