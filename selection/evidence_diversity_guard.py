@@ -225,19 +225,28 @@ def _normalize_token(token: str) -> str:
     """
     Lightly normalize a single lowercase word token.
 
-    Applies a minimal, heuristic plural-stripping rule (not a full
-    lemmatizer) so that simple plural/singular variants -- e.g.
-    "satellites"/"satellite", "cars"/"car", "countries"/"country" --
-    are treated as the same underlying concept.
+    Applies a minimal heuristic plural-stripping rule (not a full
+    lemmatizer) so that simple plural/singular variants are treated
+    as the same concept.
     """
     if len(token) > 4 and token.endswith("ies"):
         return token[:-3] + "y"
-    if len(token) > 3 and token.endswith("es"):
+
+    # Remove "es" only for common English plural endings
+    if (
+        len(token) > 4
+        and token.endswith("es")
+        and (
+            token[:-2].endswith(("s", "x", "z"))
+            or token[:-2].endswith(("ch", "sh"))
+        )
+    ):
         return token[:-2]
+
     if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
         return token[:-1]
-    return token
 
+    return token
 
 @lru_cache(maxsize=None)
 def _tokenize(text: str) -> FrozenSet[str]:
