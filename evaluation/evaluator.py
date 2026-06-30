@@ -100,6 +100,17 @@ def _selected_token_count(result: Dict[str, Any]) -> int:
     return total
 
 
+def _retrieved_texts(result: Dict[str, Any]) -> str:
+    """Concatenate all scored (retrieved) sentence texts into one string."""
+    return " ".join(str(getattr(s, "text", "")) for s in result.get("sentences", []))
+
+
+def _selected_texts(result: Dict[str, Any]) -> str:
+    """Concatenate all final selected sentence texts into one string."""
+    return " ".join(str(s.get("text", "")) for s in result.get("selected_sentences", []))
+
+
+
 def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
     """Run the pipeline on a single QA pair and compute per-query metrics.
 
@@ -126,6 +137,13 @@ def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
     retrieved_tokens = _retrieved_token_count(result)
     selected_tokens = _selected_token_count(result)
 
+    # Retrieval-recall: was the gold answer actually present in the evidence?
+    # This separates retrieval/selection quality from answer formatting — a
+    # low EM with high answer_in_retrieved means the answer-generation step
+    # (not retrieval) is the bottleneck.
+    answer_in_retrieved = metrics.answer_contains_gold(_retrieved_texts(result), gold)
+    answer_in_selected = metrics.answer_contains_gold(_selected_texts(result), gold)
+
     return {
         "question_id": qa.get("question_id"),
         "dataset": qa.get("dataset"),
@@ -136,6 +154,8 @@ def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
         "exact_match": metrics.exact_match(answer, gold),
         "f1": metrics.f1_score(answer, gold),
         "contains_gold": metrics.answer_contains_gold(answer, gold),
+        "answer_in_retrieved": answer_in_retrieved,
+        "answer_in_selected": answer_in_selected,
         "grounded": bool(verification.get("grounded", False)),
         "faithfulness": float(verification.get("faithfulness", 0.0) or 0.0),
         "retrieved_tokens": retrieved_tokens,
@@ -161,6 +181,8 @@ def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             "exact_match": _mean([r["exact_match"] for r in rows]),
             "f1": _mean([r["f1"] for r in rows]),
             "contains_gold": _mean([r["contains_gold"] for r in rows]),
+            "answer_in_retrieved": _mean([1.0 if r["answer_in_retrieved"] else 0.0 for r in rows]),
+            "answer_in_selected": _mean([1.0 if r["answer_in_selected"] else 0.0 for r in rows]),
             "grounded_rate": _mean([1.0 if r["grounded"] else 0.0 for r in rows]),
             "faithfulness": _mean([r["faithfulness"] for r in rows]),
             "compression_ratio": _mean([r["compression_ratio"] for r in rows]),

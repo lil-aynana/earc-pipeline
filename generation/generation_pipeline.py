@@ -27,14 +27,17 @@ class GenerationPipeline:
         """Run Layers 11-13 and return the answer plus supporting metadata."""
         query = query_info.get("query", "")
         query_type = query_info.get("query_type", "descriptive")
+        has_negation = bool(query_info.get("has_negation", False))
 
         # Layer 11 — Prompt Construction
         prompt_bundle = prompt_builder.build_prompt(
-            query, selected_sentences, query_type
+            query, selected_sentences, query_type, has_negation=has_negation
         )
 
         # Layer 12 — Answer Generation
-        gen = self.generator.generate(prompt_bundle, query, query_type)
+        gen = self.generator.generate(
+            prompt_bundle, query, query_type, has_negation=has_negation
+        )
 
         # Layer 13 — Answer Verification & Citation Grounding
         verification = answer_verifier.verify(

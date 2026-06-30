@@ -27,6 +27,15 @@ from typing import Any, Dict, List, Optional
 
 from config import CONFIG
 
+# Surface cues that indicate a sentence itself expresses a negation/exclusion.
+# Used by the extractive backend to answer negated questions with evidence
+# that actually addresses the exclusion rather than the affirmative set.
+_NEGATION_CUES = (
+    " not ", " no ", " non-", " never ", " except", " excluding", " without ",
+    " neither ", " nor ", " outside ", "isn't", "aren't", "wasn't", "weren't",
+    "non-member", "not a member", "not members",
+)
+
 
 class AnswerGenerator:
     """Layer 12 — pluggable answer generation."""
@@ -38,7 +47,13 @@ class AnswerGenerator:
 
     # ── public API ────────────────────────────────────────────────────────
 
-    def generate(self, prompt_bundle: Dict[str, Any], query: str, query_type: str) -> Dict[str, Any]:
+    def generate(
+        self,
+        prompt_bundle: Dict[str, Any],
+        query: str,
+        query_type: str,
+        has_negation: bool = False,
+    ) -> Dict[str, Any]:
         """Generate an answer from a Layer 11 prompt bundle.
 
         Returns a dict with ``answer`` (str) and ``backend`` (the backend
@@ -52,7 +67,7 @@ class AnswerGenerator:
         backend = self.backend
         try:
             if backend == "extractive":
-                answer = self._extractive(evidence, query, query_type)
+                answer = self._extractive(evidence, query, query_type, has_negation)
             elif backend == "transformers":
                 answer = self._transformers(prompt_bundle["prompt"])
             elif backend == "openai":
@@ -60,10 +75,10 @@ class AnswerGenerator:
             elif backend == "ollama":
                 answer = self._ollama(prompt_bundle["prompt"])
             else:
-                answer = self._extractive(evidence, query, query_type)
+                answer = self._extractive(evidence, query, query_type, has_negation)
                 backend = "extractive"
         except Exception as exc:  # noqa: BLE001 - degrade gracefully, never crash
-            answer = self._extractive(evidence, query, query_type)
+            answer = self._extractive(evidence, query, query_type, has_negation)
             backend = f"extractive (fallback from {self.backend}: {type(exc).__name__})"
 
         return {"answer": answer.strip(), "backend": backend}
@@ -71,14 +86,29 @@ class AnswerGenerator:
     # ── backends ──────────────────────────────────────────────────────────
 
     @staticmethod
-    def _extractive(evidence: List[Dict[str, Any]], query: str, query_type: str) -> str:
+    def _extractive(
+        evidence: List[Dict[str, Any]],
+        query: str,
+        query_type: str,
+        has_negation: bool = False,
+    ) -> str:
         """Deterministic, LLM-free answer built from the evidence.
 
         Picks the most relevant evidence sentences (already ordered by
         Layer 11) and stitches them into a concise, cited answer. The number
         of sentences used scales with query type.
+
+        For negated/exclusionary questions, the extractive backend cannot
+        compute a set difference, so it (1) prefers evidence sentences that
+        themselves express a negation/exclusion, and (2) if none do — i.e. the
+        evidence only describes the affirmative set — returns an explicit
+        caveat instead of confidently asserting the opposite.
         """
         qt = (query_type or "").strip().lower()
+
+        if has_negation:
+            return AnswerGenerator._extractive_negated(evidence)
+
         if qt == "factoid":
             n = 1
         elif qt == "multi_hop":
@@ -86,7 +116,11 @@ class AnswerGenerator:
         else:
             n = 2
 
-        chosen = evidence[:n]
+        return AnswerGenerator._stitch(evidence[:n])
+
+    @staticmethod
+    def _stitch(chosen: List[Dict[str, Any]]) -> str:
+        """Join evidence sentences into a cited answer string."""
         parts: List[str] = []
         for i, sent in enumerate(chosen, 1):
             text = str(sent.get("text", "")).strip()
@@ -99,6 +133,33 @@ class AnswerGenerator:
         if not parts:
             return "I don't have enough information to answer."
         return " ".join(parts)
+
+    @staticmethod
+    def _extractive_negated(evidence: List[Dict[str, Any]]) -> str:
+        """Answer a negated/exclusionary question from extractive evidence.
+
+        Prefers sentences that explicitly express exclusion. If the evidence
+        contains no such sentence, the exclusion cannot be derived from it, so
+        a clear caveat is returned rather than a misleading affirmative.
+        """
+        negation_hits = [
+            sent for sent in evidence
+            if any(cue in f" {str(sent.get('text', '')).lower()} " for cue in _NEGATION_CUES)
+        ]
+        if negation_hits:
+            return AnswerGenerator._stitch(negation_hits[:2])
+
+        # Evidence only describes the affirmative/included set.
+        lead = str(evidence[0].get("text", "")).strip() if evidence else ""
+        if lead and lead[-1] not in ".!?":
+            lead += "."
+        return (
+            "The retrieved evidence describes the included/affirmative set and "
+            "does not directly state what is excluded, so the exclusion cannot "
+            "be reliably enumerated from it. Most relevant evidence: "
+            f"{lead} [1]"
+        )
+
 
     def _transformers(self, prompt: str) -> str:
         """Local HuggingFace seq2seq generation (e.g. flan-t5)."""
