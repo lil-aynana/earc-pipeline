@@ -193,6 +193,16 @@ def run(
     selected: list[dict[str, Any]] = selected_bridge + selected_non_bridge
     selected.sort(key=lambda s: (s["doc_id"], s.get("position", s["sent_idx"])))
 
+    selected_keys = {
+    (s["doc_id"], s["sent_idx"])
+    for s in selected
+    }
+
+    candidate_sentences = [
+        s for s in sentences
+        if (s["doc_id"], s["sent_idx"]) not in selected_keys
+    ]
+
     tokens_used = budget - remaining
     budget_stats = {
         "query_type": query_type,
@@ -204,4 +214,4 @@ def run(
         "bridge_selected": len(selected_bridge),
         "non_bridge_selected": len(selected_non_bridge),
     }
-    return {"sentences": selected, "stats": {**layer7_stats, "budget": budget_stats}}
+    return {"selected_sentences": selected, "candidate_sentences": candidate_sentences, "stats": {**layer7_stats, "budget": budget_stats}}
