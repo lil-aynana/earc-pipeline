@@ -29,6 +29,8 @@ from retrieval.retrieval_config import (
     FAISS_PATH,
     METADATA_DIR,
 )
+from scoring.scoring_pipeline import ScoringPipeline
+from selection.selection_pipeline import SelectionPipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,13 +74,11 @@ class EARCPipeline:
             faiss_index, bm25_index, all_chunks, all_metadata, embed_model
         )
 
-        # Module 2 — Scoring (plug in when ready)
-        # from scoring.scoring_pipeline import ScoringPipeline
-        # self.scoring_pipeline = ScoringPipeline(embed_model)
+        # Module 2 — Scoring (Stages 4-6)
+        self.scoring_pipeline = ScoringPipeline()
 
-        # Module 3 — Selection (plug in when ready)
-        # from selection.selection_pipeline import SelectionPipeline
-        # self.selection_pipeline = SelectionPipeline()
+        # Module 3 — Selection (Stages 7-9)
+        self.selection_pipeline = SelectionPipeline()
 
         # Module 4 — Generation (plug in when ready)
         # from generation.generation_pipeline import GenerationPipeline
@@ -95,17 +95,21 @@ class EARCPipeline:
         dict with at minimum:
             query      : str
             query_info : dict (query_type, keywords, entities, has_negation)
-            sentences  : List[SentenceObject]   ← Module 1 output
+            sentences  : List[SentenceObject]   ← Module 2 output (scored + deduped)
+            selected_sentences : list[dict]     ← Module 3 output
+            candidate_sentences: list[dict]     ← Module 3 output
+            selection_stats    : dict           ← Module 3 stats
             # answer   : str                    ← added when Module 4 is wired in
         """
         # Stage 1–3: Retrieval
         sentences, query_info = self.retrieval_layer.retrieve(query)
 
-        # Stage 4–6: Scoring  (stub — wire in Module 2 here)
-        # sentences = self.scoring_pipeline.score(sentences, query_info)
+        # Stage 4–6: Scoring
+        sentences = self.scoring_pipeline.run(query_info, sentences)
+        scored_records = self.scoring_pipeline.to_selection_records(sentences)
 
-        # Stage 7–9: Selection  (stub — wire in Module 3 here)
-        # selected = self.selection_pipeline.select(sentences, query_info)
+        # Stage 7–9: Selection
+        selection_output = self.selection_pipeline.run(query_info, scored_records)
 
         # Stage 10–12: Generation  (stub — wire in Module 4 here)
         # answer = self.generation_pipeline.generate(selected, query_info)
@@ -114,6 +118,9 @@ class EARCPipeline:
             'query'     : query,
             'query_info': query_info,
             'sentences' : sentences,
+            'selected_sentences': selection_output['selected_sentences'],
+            'candidate_sentences': selection_output['candidate_sentences'],
+            'selection_stats': selection_output['stats'],
         }
 
 

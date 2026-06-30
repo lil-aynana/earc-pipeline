@@ -1,68 +1,67 @@
+"""Module 2 orchestration: Layers 4-6."""
 
-# scoring/scoring_pipeline.py
+from __future__ import annotations
 
-from scoring.query_first_embedder import QueryFirstEmbedder
+from typing import Any
+
+from retrieval.sentence_object import SentenceObject
 from scoring.multi_signal_scorer import MultiSignalScorer
+from scoring.query_first_embedder import QueryFirstEmbedder
 from scoring.redundancy_remover import RedundancyRemover
 
 
 class ScoringPipeline:
-    """
-    Complete scoring pipeline: embedding → multi-signal scoring → deduplication.
-
-    This is the main interface for Person 3 to use.
-    """
+    """Runs embedding, multi-signal scoring, and redundancy removal."""
 
     def __init__(self):
         self.embedder = QueryFirstEmbedder()
         self.scorer = MultiSignalScorer()
         self.remover = RedundancyRemover()
-        print("\nScoringPipeline initialized")
 
-    def run(
-        self,
-        query: str,
-        query_type: str,
-        sentences: list[dict],
-        verbose: bool = False
-    ) -> list[dict]:
-        """
-        Run complete scoring pipeline.
+    def run(self, query_info: dict[str, Any], sentences: list[SentenceObject]) -> list[SentenceObject]:
+        """Score Module 1 `SentenceObject` output and return deduplicated results."""
+        if not sentences:
+            return sentences
 
-        Args:
-            query: User's question
-            query_type: One of 'factoid', 'descriptive', 'multi_hop'
-            sentences: List from retrieval pipeline (embeddings=None, score=0.0)
-            verbose: Print detailed progress
+        query = query_info["query"]
+        query_type = query_info["query_type"]
 
-        Returns:
-            Deduplicated, scored, embedded sentence list
-        """
-        if verbose:
-            print(f"\n{'=' * 70}")
-            print(f"SCORING PIPELINE START")
-            print(f"{'=' * 70}")
-            print(f"Query: {query}")
-            print(f"Type:  {query_type}")
-            print(f"Input: {len(sentences)} sentences")
-
-        # Step 4: Query-first embedding
         sentences = self.embedder.embed_sentences(query, sentences)
         query_embedding = self.embedder.get_query_embedding(query)
-
-        # Step 5: Multi-signal scoring
-        sentences = self.scorer.score_sentences(
-            query,
-            query_type,
-            sentences,
-            query_embedding
-        )
-
-        # Step 6: Redundancy removal
+        sentences = self.scorer.score_sentences(query, query_type, sentences, query_embedding)
         sentences = self.remover.remove_redundancy(sentences)
-
-        if verbose:
-            print(f"\nOutput: {len(sentences)} unique sentences")
-            print(f"{'=' * 70}\n")
-
         return sentences
+
+    def to_selection_records(self, sentences: list[SentenceObject]) -> list[dict[str, Any]]:
+        """Convert scored `SentenceObject`s to Module 3's dict schema."""
+        records: list[dict[str, Any]] = []
+        for sent in sentences:
+            records.append(
+                {
+                    "sentence_id": sent.sentence_id,
+                    "text": sent.text,
+                    "doc_id": sent.doc_id,
+                    "dataset": sent.dataset,
+                    "title": sent.title,
+                    "position": sent.position,
+                    "sent_idx": sent.position,
+                    "retrieval_rank": sent.retrieval_rank,
+                    "chunk_id": sent.chunk_id,
+                    "year": sent.year,
+                    "bm25_score": sent.bm25_score,
+                    "faiss_score": sent.faiss_score,
+                    "retrieval_score": sent.retrieval_score,
+                    "embedding": sent.embedding,
+                    "contains_query_entity": sent.contains_query_entity,
+                    "token_count": sent.token_count,
+                    "score": sent.final_score,
+                    "semantic_score": sent.semantic_score,
+                    "evidence_score": sent.evidence_score,
+                    "evidentiality_score": sent.evidentiality_score,
+                    "claim_density_score": sent.claim_density_score,
+                    "temporal_score": sent.temporal_score,
+                    "is_bridge": bool(sent.force_include),
+                    "force_include": bool(sent.force_include),
+                }
+            )
+        return records

@@ -1,83 +1,63 @@
 
-# scoring/redundancy_remover.py
+"""Layer 6: Redundancy removal for scored sentence candidates."""
+
+from __future__ import annotations
 
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
+
 from config import CONFIG
+from retrieval.sentence_object import SentenceObject
 
 
 class RedundancyRemover:
-    """
-    Remove duplicate and near-duplicate sentences using
-    embedding similarity and document-aware rules.
-    """
+    """Greedy duplicate removal using embedding similarity thresholds."""
 
     def __init__(self):
-        self.exact_threshold = CONFIG["redundancy_exact_threshold"]  # 0.92
-        self.soft_threshold = CONFIG["redundancy_soft_threshold"]    # 0.80
-        print(f"RedundancyRemover initialized")
-        print(f"  Exact duplicate threshold: {self.exact_threshold}")
-        print(f"  Soft duplicate threshold:  {self.soft_threshold}")
+        self.exact_threshold = float(CONFIG["redundancy_exact_threshold"])
+        self.soft_threshold = float(CONFIG["redundancy_soft_threshold"])
 
-    def remove_redundancy(self, sentences: list[dict]) -> list[dict]:
-        """
-        Greedy deduplication using cosine similarity thresholds.
+    def remove_redundancy(self, sentences: list[SentenceObject]) -> list[SentenceObject]:
+        if not sentences:
+            return sentences
 
-        Args:
-            sentences: List of scored sentence dicts with embeddings
-
-        Returns:
-            Deduplicated sentence list
-        """
-        print(f"\nRemoving redundancy from {len(sentences)} sentences...")
-
-        # Sort by score descending (keep highest-scoring duplicates)
         sorted_sentences = sorted(
             sentences,
-            key=lambda x: x['score'],
-            reverse=True
+            key=lambda s: s.final_score,
+            reverse=True,
         )
 
-        kept_sentences = []
-        removed_count = 0
-
+        kept: list[SentenceObject] = []
         for candidate in sorted_sentences:
+            if candidate.embedding is None:
+                kept.append(candidate)
+                continue
+
             should_keep = True
+            for existing in kept:
+                if existing.embedding is None:
+                    continue
+                similarity = self._cosine_sim(candidate.embedding, existing.embedding)
 
-            # Compare against all kept sentences
-            for kept in kept_sentences:
-                similarity = self._cosine_sim(
-                    candidate['embedding'],
-                    kept['embedding']
-                )
-
-                # Rule 1: Exact duplicate (≥0.92 similarity)
                 if similarity >= self.exact_threshold:
                     should_keep = False
-                    removed_count += 1
                     break
 
-                # Rule 2: Soft duplicate (0.80-0.92) from same document
-                if (self.soft_threshold <= similarity < self.exact_threshold):
-                    if candidate['doc_id'] == kept['doc_id']:
-                        # Same document: remove lower-scoring one (candidate)
+                if self.soft_threshold <= similarity < self.exact_threshold:
+                    if candidate.doc_id == existing.doc_id:
                         should_keep = False
-                        removed_count += 1
                         break
-                    # Different documents: keep both (complementary framing)
 
             if should_keep:
-                kept_sentences.append(candidate)
+                kept.append(candidate)
 
-        print(f"✓ Removed {removed_count} redundant sentences")
-        print(f"✓ Kept {len(kept_sentences)} unique sentences")
+        # Restore stable order for downstream modules.
+        kept.sort(key=lambda s: (s.retrieval_rank, s.doc_id, s.position))
+        return kept
 
-        return kept_sentences
-
-    def _cosine_sim(self, emb1: np.ndarray, emb2: np.ndarray) -> float:
-        """Compute cosine similarity between two embeddings."""
-        sim = cosine_similarity(
-            emb1.reshape(1, -1),
-            emb2.reshape(1, -1)
-        )[0][0]
-        return float(sim)
+    @staticmethod
+    def _cosine_sim(emb1: np.ndarray, emb2: np.ndarray) -> float:
+        norm1 = np.linalg.norm(emb1)
+        norm2 = np.linalg.norm(emb2)
+        if norm1 == 0.0 or norm2 == 0.0:
+            return 0.0
+        return float(np.dot(emb1, emb2) / (norm1 * norm2))
