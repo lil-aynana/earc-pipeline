@@ -31,6 +31,7 @@ from retrieval.retrieval_config import (
 )
 from scoring.scoring_pipeline import ScoringPipeline
 from selection.selection_pipeline import SelectionPipeline
+from generation.generation_pipeline import GenerationPipeline
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,12 +78,11 @@ class EARCPipeline:
         # Module 2 — Scoring (Stages 4-6)
         self.scoring_pipeline = ScoringPipeline()
 
-        # Module 3 — Selection (Stages 7-9)
+        # Module 3 — Selection (Stages 7-10)
         self.selection_pipeline = SelectionPipeline()
 
-        # Module 4 — Generation (plug in when ready)
-        # from generation.generation_pipeline import GenerationPipeline
-        # self.generation_pipeline = GenerationPipeline()
+        # Module 4 — Generation (Stages 11-13)
+        self.generation_pipeline = GenerationPipeline()
 
         log.info('EARCPipeline ready.')
 
@@ -99,7 +99,8 @@ class EARCPipeline:
             selected_sentences : list[dict]     ← Module 3 output
             candidate_sentences: list[dict]     ← Module 3 output
             selection_stats    : dict           ← Module 3 stats
-            # answer   : str                    ← added when Module 4 is wired in
+            answer     : str                    ← Module 4 output
+            generation : dict                   ← Module 4 prompt/citations/verification
         """
         # Stage 1–3: Retrieval
         sentences, query_info = self.retrieval_layer.retrieve(query)
@@ -108,11 +109,13 @@ class EARCPipeline:
         sentences = self.scoring_pipeline.run(query_info, sentences)
         scored_records = self.scoring_pipeline.to_selection_records(sentences)
 
-        # Stage 7–9: Selection
+        # Stage 7–10: Selection
         selection_output = self.selection_pipeline.run(query_info, scored_records)
 
-        # Stage 10–12: Generation  (stub — wire in Module 4 here)
-        # answer = self.generation_pipeline.generate(selected, query_info)
+        # Stage 11–13: Generation
+        generation_output = self.generation_pipeline.generate(
+            query_info, selection_output['selected_sentences']
+        )
 
         return {
             'query'     : query,
@@ -121,6 +124,8 @@ class EARCPipeline:
             'selected_sentences': selection_output['selected_sentences'],
             'candidate_sentences': selection_output['candidate_sentences'],
             'selection_stats': selection_output['stats'],
+            'answer': generation_output['answer'],
+            'generation': generation_output,
         }
 
 
@@ -142,3 +147,6 @@ if __name__ == '__main__':
         print(f"Sentences  : {len(result['sentences'])}")
         entity_count = sum(1 for s in result['sentences'] if s.contains_query_entity)
         print(f"With entity: {entity_count}")
+        print(f"Answer     : {result['answer']}")
+        print(f"Grounded   : {result['generation']['verification']['grounded']}"
+              f" (faithfulness={result['generation']['verification']['faithfulness']})")

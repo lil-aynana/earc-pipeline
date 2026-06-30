@@ -1,15 +1,15 @@
-"""Module 3 orchestration: Layers 7-9."""
+"""Module 3 orchestration: Layers 7-10."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from selection import adaptive_budget, evidence_diversity_guard
+from selection import adaptive_budget, evidence_diversity_guard, evidence_sufficiency
 from selection.reasoning_chain_graph import ReasoningChainGraph
 
 
 class SelectionPipeline:
-    """Runs reasoning graph, budget selection, and diversity guard."""
+    """Runs reasoning graph, budget selection, diversity guard, and sufficiency."""
 
     def __init__(self):
         self.reasoning_graph = ReasoningChainGraph()
@@ -19,7 +19,7 @@ class SelectionPipeline:
         query_info: dict[str, Any],
         scored_records: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        """Return selected/candidate evidence after layers 7-9."""
+        """Return selected/candidate evidence after layers 7-10."""
         if not scored_records:
             return {
                 "selected_sentences": [],
@@ -55,6 +55,18 @@ class SelectionPipeline:
                         "coverage_after": 0,
                         "coverage_delta": 0,
                     },
+                    "sufficiency": {
+                        "is_sufficient": False,
+                        "coverage_complete": False,
+                        "minimum_evidence_met": False,
+                        "bridge_requirement_met": True,
+                        "query_complexity": "low",
+                        "required_evidence": 0,
+                        "final_evidence_count": 0,
+                        "expansions": 0,
+                        "expansion_limit": 0,
+                        "stopped_reason": "no_evidence",
+                    },
                 },
             }
 
@@ -62,7 +74,8 @@ class SelectionPipeline:
         layer8_output = adaptive_budget.run(query_info, layer7_output)
         layer8_output = self._normalize_layer8(layer8_output)
         layer9_output = evidence_diversity_guard.run(query_info, layer8_output)
-        return layer9_output
+        layer10_output = evidence_sufficiency.run(query_info, layer9_output)
+        return layer10_output
 
     @staticmethod
     def _normalize_layer8(layer8_output: dict[str, Any]) -> dict[str, Any]:

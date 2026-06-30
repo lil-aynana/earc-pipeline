@@ -119,4 +119,34 @@ CONFIG = {
     #defaults for layer 10
     "default_minimum_evidence": 4,
     "default_max_expansion": 3,
+
+    # Generation (Module 4 — Layers 11-13)
+    "generation": {
+        # Backend used by Layer 12 (answer generation).
+        #   "extractive"  — deterministic, no LLM / no extra downloads (default,
+        #                   always works on Colab and offline).
+        #   "transformers"— local HuggingFace seq2seq model (e.g. flan-t5).
+        #   "openai"      — OpenAI Chat Completions API (needs OPENAI_API_KEY).
+        #   "ollama"      — local Ollama server (uses ollama_url / llm_model).
+        "backend": "extractive",
+
+        # transformers backend
+        "hf_model": "google/flan-t5-base",
+        "hf_max_new_tokens": 256,
+
+        # openai backend
+        "openai_model": "gpt-4o-mini",
+
+        # Max evidence sentences fed into the prompt context, by query type.
+        "max_context_sentences": {
+            "factoid": 5,
+            "descriptive": 8,
+            "multi_hop": 10,
+        },
+        "default_max_context_sentences": 8,
+
+        # Layer 13: min token-overlap ratio for an answer sentence to count
+        # as "grounded" in the provided evidence.
+        "grounding_overlap_threshold": 0.5,
+    },
 }

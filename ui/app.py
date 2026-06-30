@@ -50,10 +50,32 @@ if st.button("Run EARC"):
             with st.spinner("Loading pipeline artifacts..."):
                 pipeline = load_pipeline(faiss_path, bm25_path, chunks_dir, metadata_dir)
 
-            with st.spinner("Running stages 1-9..."):
+            with st.spinner("Running stages 1-13..."):
                 result = pipeline.run(query.strip())
 
             query_info = result["query_info"]
+
+            st.subheader("Answer (Module 4)")
+            gen = result.get("generation", {})
+            ver = gen.get("verification", {})
+            st.markdown(f"> {result.get('answer', '_(no answer)_')}")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Backend", gen.get("backend", "—"))
+            m2.metric("Grounded", str(ver.get("grounded", "—")))
+            m3.metric("Faithfulness", ver.get("faithfulness", "—"))
+            if gen.get("citations"):
+                with st.expander("Cited sources"):
+                    for c in gen["citations"]:
+                        st.markdown(
+                            f"**[{c['marker']}]** {c.get('dataset')}/{c.get('doc_id')}"
+                        )
+                        st.write(c["text"])
+            if ver.get("unsupported_sentences"):
+                st.warning(
+                    "Unsupported answer sentences: "
+                    + " | ".join(ver["unsupported_sentences"])
+                )
+
             st.subheader("Query Analysis")
             c1, c2, c3 = st.columns(3)
             c1.metric("Query Type", query_info["query_type"])
