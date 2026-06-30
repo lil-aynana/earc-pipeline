@@ -25,9 +25,11 @@ CONFIG = {
     "contradiction_sim_high":     0.88,
 
     # Sufficiency verification
-    "sufficiency_threshold":        0.60,
-    "sufficiency_expansion_factor": 1.30,
-    "max_expansion_rounds":         2,
+    "max_expansion_by_query_type": {
+    "factoid": 2,
+    "descriptive": 3,
+    "multi_hop": 4
+    },
 
     # Scoring weights per query type
     "scoring_weights": {
@@ -76,5 +78,45 @@ CONFIG = {
         "natural_questions",
         "hotpot_qa",
         "trivia_qa"
-    ]
+    ], 
+
+    #query complexity
+    "query_complexity": {
+        "low": {
+            "max_query_words": 5,
+            "max_entities": 1,
+            "max_keywords": 2
+        },
+        "medium": {
+            "max_query_words": 12,
+            "max_entities": 3,
+            "max_keywords": 5
+        },
+        "high": {}
+    },
+
+    #Minimum evidence
+    "minimum_evidence": {
+        "factoid": 2,
+        "descriptive": 4,
+        "multi_hop": 6
+    },
+
+    #Complexity bump
+    "complexity_evidence_bump": {
+        "low": 0,
+        "medium": 0,
+        "high": 1
+    },
+
+    #Bridge requirement
+    "bridge_required": {
+        "factoid": False,
+        "descriptive": False,
+        "multi_hop": True
+    },
+
+    #defaults for layer 10
+    "default_minimum_evidence": 4,
+    "default_max_expansion": 3,
 }
