@@ -15,6 +15,10 @@ threshold is considered "grounded". It also resolves the inline ``[n]``
 citation markers back to their source documents and flags any markers that
 point outside the available evidence range.
 
+Answers that are deliberate refusals (e.g. "I don't have enough information
+to answer") are detected up front and scored separately: declining to answer
+is treated as correct, safe behavior, not as an ungrounded claim.
+
 The output is advisory: it annotates the result with a faithfulness score
 and a list of unsupported sentences but never rewrites the answer.
 """
@@ -39,6 +43,21 @@ _STOPWORDS = frozenset(
     some such no nor not only own same so than too very can will just
     """.split()
 )
+
+# Prefixes that identify a deliberate "no answer" response from
+# AnswerGenerator's own fallback paths (empty evidence, or a negated query the
+# evidence can't support). These are NOT hallucinations and must not be
+# scored as ungrounded.
+_NO_ANSWER_PREFIXES = (
+    "i don't have enough information to answer",
+    "the retrieved evidence describes the included/affirmative set",
+)
+
+
+def _is_no_answer_response(answer: str) -> bool:
+    """True if ``answer`` is a deliberate refusal-to-answer, not a real claim."""
+    normalized = (answer or "").strip().lower()
+    return any(normalized.startswith(prefix) for prefix in _NO_ANSWER_PREFIXES)
 
 
 def _content_tokens(text: str) -> List[str]:
@@ -120,6 +139,23 @@ def verify(
 ) -> Dict[str, Any]:
     """Assess grounding of ``answer`` against the evidence."""
 
+    # Refusal responses are correct-by-design, not ungrounded claims — score
+    # them separately and skip the overlap machinery entirely.
+    if _is_no_answer_response(answer):
+        return {
+            "grounded": True,
+            "faithfulness": None,
+            "mean_overlap": None,
+            "supported_sentences": 0,
+            "scored_sentences": 0,
+            "unsupported_sentences": [],
+            "citation_count": 0,
+            "distinct_citations": [],
+            "invalid_citations": [],
+            "has_citations": False,
+            "is_refusal": True,
+        }
+
     threshold = float(
         CONFIG.get("generation", {}).get(
             "grounding_overlap_threshold",
@@ -188,4 +224,5 @@ def verify(
         "distinct_citations": sorted(set(used_markers)),
         "invalid_citations": invalid_markers,
         "has_citations": len(used_markers) > 0,
+        "is_refusal": False,
     }
