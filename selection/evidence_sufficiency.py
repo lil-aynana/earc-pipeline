@@ -31,8 +31,114 @@ present in the Layer 9 output and query analysis.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
+import config
 
-from selection import config
+
+# ==========================================================================
+# Sentence-level validation
+# ==========================================================================
+
+# Fields every sentence dict must carry in order for Layer 10 to operate
+# on it. ``entities`` and ``keywords`` are included here deliberately:
+# Layer 10's coverage-driven ranking (`_covers_any`) and iterative-gap
+# tracking (`_iterative_expansion`) both depend on these fields being
+# present lists, not on Layer 10 inferring them from raw text. Layers
+# upstream (Layer 9 and earlier) are the ones responsible for producing
+# accurate entity/keyword annotations; silently tolerating their absence
+# here would let a broken upstream contract masquerade as "zero coverage"
+# instead of surfacing as the pipeline defect it is.
+_REQUIRED_SENTENCE_FIELDS: Tuple[str, ...] = (
+    "text",
+    "score",
+    "doc_id",
+    "sent_idx",
+    "is_bridge",
+    "entities",
+    "keywords",
+)
+
+
+def _validate_sentence(sentence: Any, list_name: str, index: int) -> None:
+    """Validate the structural integrity of a single sentence dict.
+
+    Args:
+        sentence: The candidate/selected sentence object to validate.
+        list_name: Name of the containing list (for error messages),
+            e.g. ``"selected_sentences"`` or ``"candidate_sentences"``.
+        index: Position of ``sentence`` within its containing list (for
+            error messages).
+
+    Raises:
+        TypeError: If ``sentence`` is not a dict, or if a required
+            field has the wrong type.
+        ValueError: If a required field is missing.
+    """
+    if not isinstance(sentence, dict):
+        raise TypeError(
+            f"layer9_output['{list_name}'][{index}] must be a dict, "
+            f"got {type(sentence).__name__}."
+        )
+
+    for field in _REQUIRED_SENTENCE_FIELDS:
+        if field not in sentence:
+            raise ValueError(
+                f"layer9_output['{list_name}'][{index}] is missing required "
+                f"field: '{field}'"
+            )
+
+    if not isinstance(sentence["text"], str):
+        raise TypeError(
+            f"layer9_output['{list_name}'][{index}]['text'] must be a str."
+        )
+    if not isinstance(sentence["score"], (int, float)) or isinstance(
+        sentence["score"], bool
+    ):
+        raise TypeError(
+            f"layer9_output['{list_name}'][{index}]['score'] must be a "
+            f"number."
+        )
+    if sentence["doc_id"] is None:
+        raise ValueError(
+            f"layer9_output['{list_name}'][{index}]['doc_id'] must not be "
+            f"None."
+        )
+    if not isinstance(sentence["sent_idx"], int) or isinstance(
+        sentence["sent_idx"], bool
+    ):
+        raise TypeError(
+            f"layer9_output['{list_name}'][{index}]['sent_idx'] must be an "
+            f"int."
+        )
+    if not isinstance(sentence["is_bridge"], bool):
+        raise TypeError(
+            f"layer9_output['{list_name}'][{index}]['is_bridge'] must be a "
+            f"bool."
+        )
+    if not isinstance(sentence["entities"], list):
+        raise TypeError(
+            f"layer9_output['{list_name}'][{index}]['entities'] must be a "
+            f"list."
+        )
+    if not isinstance(sentence["keywords"], list):
+        raise TypeError(
+            f"layer9_output['{list_name}'][{index}]['keywords'] must be a "
+            f"list."
+        )
+
+
+def _validate_sentence_list(sentences: List[Any], list_name: str) -> None:
+    """Validate every sentence dict within a list.
+
+    Args:
+        sentences: The list of sentence dicts to validate.
+        list_name: Name of the list (for error messages).
+
+    Raises:
+        TypeError: If any element fails type validation.
+        ValueError: If any element is missing a required field.
+    """
+    for index, sentence in enumerate(sentences):
+        _validate_sentence(sentence, list_name, index)
 
 
 # ==========================================================================
@@ -86,6 +192,18 @@ def _validate_inputs(
     if not isinstance(layer9_output["candidate_sentences"], list):
         raise TypeError("layer9_output['candidate_sentences'] must be a list.")
 
+    # Validate each individual sentence dict, not just the containing
+    # lists. Layer 10 reads specific fields off of every sentence
+    # (directly, and via helpers like `_covers_any` / `_is_bridge_sentence`
+    # / `_sentence_key`), so malformed entries must be rejected up front
+    # rather than surfacing as confusing KeyErrors deep in ranking logic.
+    _validate_sentence_list(
+        layer9_output["selected_sentences"], "selected_sentences"
+    )
+    _validate_sentence_list(
+        layer9_output["candidate_sentences"], "candidate_sentences"
+    )
+
     stats = layer9_output["stats"]
     if not isinstance(stats, dict):
         raise TypeError("layer9_output['stats'] must be a dict.")
@@ -113,7 +231,7 @@ def _compute_query_complexity(query_analysis: Dict[str, Any]) -> str:
 
     Uses simple surface features -- query word count, entity count, and
     keyword count -- compared against explicit thresholds defined in
-    ``selection.config.COMPLEXITY_THRESHOLDS``.
+    ``selection.config.CONFIG["query_complexity"]``.
 
     A query is classified as the lowest tier for which it satisfies
     every feature's threshold; if it exceeds the "medium" thresholds on
@@ -130,8 +248,13 @@ def _compute_query_complexity(query_analysis: Dict[str, Any]) -> str:
     entity_count = len(query_analysis["entities"])
     keyword_count = len(query_analysis["keywords"])
 
-    low = config.COMPLEXITY_THRESHOLDS["low"]
-    medium = config.COMPLEXITY_THRESHOLDS["medium"]
+    complexity_config = config.CONFIG.get("query_complexity")
+    if complexity_config is None:
+        raise ValueError(
+            "CONFIG is missing required 'query_complexity' configuration."
+        )
+    low = complexity_config["low"]
+    medium = complexity_config["medium"]
 
     if (
         query_words <= low["max_query_words"]
@@ -151,6 +274,36 @@ def _compute_query_complexity(query_analysis: Dict[str, Any]) -> str:
 
 
 # ==========================================================================
+# Query type normalization
+# ==========================================================================
+
+def _normalize_query_type(query_type: str) -> str:
+    """Normalize query types into the canonical EARC pipeline format.
+
+    The EARC pipeline configuration (``config.CONFIG["query_types"]``)
+    uses underscore-separated, lowercase query type identifiers (e.g.
+    ``"multi_hop"``). Layer 10 accepts query types case-insensitively
+    and tolerates either hyphen- or underscore-separated spelling (e.g.
+    ``"multi-hop"`` or ``"Multi-Hop"``), normalizing them all to the
+    same canonical form before using them for comparisons or
+    configuration lookups.
+
+    Converts:
+        "FACTOID"      -> "factoid"
+        "Descriptive"  -> "descriptive"
+        "multi-hop"    -> "multi_hop"
+        "multi_hop"    -> "multi_hop"
+
+    Args:
+        query_type: The raw query type string.
+
+    Returns:
+        The canonical, lowercase, underscore-separated query type.
+    """
+    return query_type.strip().lower().replace("-", "_")
+
+
+# ==========================================================================
 # Required evidence count
 # ==========================================================================
 
@@ -159,22 +312,25 @@ def _required_evidence_count(query_type: str, complexity: str) -> int:
 
     Combines the base requirement for the query type with the
     complexity-driven bump, both defined explicitly in
-    ``selection.config``.
+    ``selection.config.CONFIG`` (under the ``"minimum_evidence"``,
+    ``"default_minimum_evidence"``, and ``"complexity_evidence_bump"``
+    keys).
 
     Args:
         query_type: One of ``"factoid"``, ``"descriptive"``,
-            ``"multi-hop"`` (case-insensitive).
+            ``"multi_hop"`` (case-insensitive; hyphen or underscore
+            separated).
         complexity: One of ``"low"``, ``"medium"``, ``"high"``.
 
     Returns:
         The minimum number of evidence sentences required.
     """
-    normalized_type = query_type.strip().lower()
+    normalized_type = _normalize_query_type(query_type)
 
-    base = config.BASE_MINIMUM_EVIDENCE.get(
-        normalized_type, config.DEFAULT_BASE_MINIMUM_EVIDENCE
+    base = config.CONFIG["minimum_evidence"].get(
+        normalized_type, config.CONFIG["default_minimum_evidence"]
     )
-    bump = config.COMPLEXITY_EVIDENCE_BUMP.get(complexity, 0)
+    bump = config.CONFIG["complexity_evidence_bump"].get(complexity, 0)
 
     return base + bump
 
@@ -224,7 +380,9 @@ def _bridge_requirement_met(
         True if the bridge requirement is satisfied or not applicable,
         False if a bridge is required but absent.
     """
-    if query_type.strip().lower() != "multi-hop":
+    normalized_type = _normalize_query_type(query_type)
+
+    if normalized_type != "multi_hop":
         return True
 
     # Layer 7 (Reasoning Chain Graph) is the source of truth for bridge
@@ -276,7 +434,16 @@ def _is_sufficient(
 # ==========================================================================
 
 def _sentence_key(sentence: Dict[str, Any]) -> Tuple[Any, Any]:
-    """Build the deterministic tie-break key ``(doc_id, sent_idx)``.
+    """Build the deterministic identity key ``(doc_id, sent_idx)``.
+
+    This key is used both as the final tie-break in ranking and as the
+    stable identifier for a sentence throughout Layer 10 -- in
+    particular for removing a newly-selected sentence from the
+    candidate pool. ``(doc_id, sent_idx)`` is used instead of Python
+    object identity (``id()``) because sentence dicts may be copied,
+    deep-copied, or reconstructed from serialized form (e.g. across a
+    JSON round-trip) by the time they reach this layer, in which case
+    ``id()`` would no longer reliably refer to "the same sentence".
 
     Args:
         sentence: A candidate sentence dict.
@@ -292,9 +459,9 @@ def _covers_any(sentence: Dict[str, Any], targets: List[Any]) -> bool:
     """Check whether a sentence's entities/keywords intersect ``targets``.
 
     Args:
-        sentence: A candidate sentence dict, expected to optionally
-            carry ``entities`` and/or ``keywords`` lists describing
-            what it covers.
+        sentence: A candidate sentence dict, carrying ``entities`` and
+            ``keywords`` lists describing what it covers (guaranteed
+            present by ``_validate_sentence``).
         targets: List of missing entities or keywords to check against.
 
     Returns:
@@ -305,7 +472,7 @@ def _covers_any(sentence: Dict[str, Any], targets: List[Any]) -> bool:
         return False
 
     target_set = set(targets)
-    covered = set(sentence.get("entities", [])) | set(sentence.get("keywords", []))
+    covered = set(sentence["entities"]) | set(sentence["keywords"])
     return len(covered & target_set) > 0
 
 
@@ -313,13 +480,13 @@ def _is_bridge_sentence(sentence: Dict[str, Any]) -> bool:
     """Check whether a candidate sentence is flagged as a bridge sentence.
 
     Args:
-        sentence: A candidate sentence dict, optionally carrying an
-            ``is_bridge`` boolean flag.
+        sentence: A candidate sentence dict, carrying an ``is_bridge``
+            boolean flag (guaranteed present by ``_validate_sentence``).
 
     Returns:
         True if the sentence is marked as a bridge sentence.
     """
-    return bool(sentence.get("is_bridge", False))
+    return bool(sentence["is_bridge"])
 
 
 def _rank_candidates(
@@ -429,7 +596,15 @@ def _expand_once(
         return list(selected), list(remaining_candidates), None
 
     new_selected = selected + [best]
-    new_remaining = [c for c in remaining_candidates if c is not best]
+
+    # Remove the chosen candidate by its stable (doc_id, sent_idx) key
+    # rather than by object identity, so this remains correct even if
+    # ``remaining_candidates`` holds copies/reconstructions of ``best``
+    # rather than the exact same object.
+    best_key = _sentence_key(best)
+    new_remaining = [
+        c for c in remaining_candidates if _sentence_key(c) != best_key
+    ]
 
     return new_selected, new_remaining, best
 
@@ -478,7 +653,7 @@ def _iterative_expansion(
 
     missing_entities = list(diversity_stats.get("missing_entities", []))
     missing_keywords = list(diversity_stats.get("missing_keywords", []))
-    bridge_required = query_type.strip().lower() == "multi-hop"
+    bridge_required = _normalize_query_type(query_type) == "multi_hop"
 
     coverage_complete = _is_coverage_complete(diversity_stats)
     bridge_met = _bridge_requirement_met(query_type, reasoning_stats)
@@ -523,12 +698,14 @@ def _iterative_expansion(
         # for purposes of *this layer's* sufficiency tracking. This
         # does not recompute or replace Layer 9's diversity scoring --
         # it only updates Layer 10's local view of remaining gaps so
-        # iterative expansion can converge.
+        # iterative expansion can converge. ``added["entities"]`` and
+        # ``added["keywords"]`` are guaranteed present by
+        # ``_validate_sentence``.
         missing_entities = [
-            e for e in missing_entities if e not in added.get("entities", [])
+            e for e in missing_entities if e not in added["entities"]
         ]
         missing_keywords = [
-            k for k in missing_keywords if k not in added.get("keywords", [])
+            k for k in missing_keywords if k not in added["keywords"]
         ]
         coverage_complete = len(missing_entities) == 0 and len(missing_keywords) == 0
 
@@ -618,7 +795,10 @@ def run(
             ``query_type``, ``entities``, and ``keywords``.
         layer9_output: Layer 9 output containing ``selected_sentences``,
             ``candidate_sentences``, and ``stats`` (with ``reasoning``,
-            ``budget``, ``diversity`` sub-dicts).
+            ``budget``, ``diversity`` sub-dicts). Every sentence dict
+            within ``selected_sentences`` and ``candidate_sentences``
+            must carry ``text``, ``score``, ``doc_id``, ``sent_idx``,
+            ``is_bridge``, ``entities``, and ``keywords``.
 
     Returns:
         Dict with the same shape as ``layer9_output``, except:
@@ -649,9 +829,9 @@ def run(
     complexity = _compute_query_complexity(query_analysis)
     required_count = _required_evidence_count(query_type, complexity)
 
-    normalized_type = query_type.strip().lower()
-    expansion_limit = config.MAX_EXPANSION_BY_QUERY_TYPE.get(
-        normalized_type, config.DEFAULT_MAX_EXPANSION
+    normalized_type = _normalize_query_type(query_type)
+    expansion_limit = config.CONFIG["max_expansion_by_query_type"].get(
+        normalized_type, config.CONFIG["default_max_expansion"]
     )
 
     initial_coverage_complete = _is_coverage_complete(diversity_stats)
@@ -691,9 +871,17 @@ def run(
             expansion_limit,
         )
 
-        selected_ids = {id(s) for s in final_selected}
+        # Remove newly-selected sentences from the candidate pool using
+        # their stable (doc_id, sent_idx) identity rather than Python
+        # object identity (id()). Object identity breaks if sentence
+        # dicts are copied, deep-copied, or reconstructed from
+        # serialized form (e.g. a JSON round-trip) before reaching this
+        # layer; (doc_id, sent_idx) uniquely and durably identifies a
+        # sentence regardless of how its dict was constructed.
+        selected_keys = {_sentence_key(s) for s in final_selected}
         final_candidates = [
-            c for c in candidate_sentences if id(c) not in selected_ids
+            c for c in candidate_sentences
+            if _sentence_key(c) not in selected_keys
         ]
 
         is_sufficient = _is_sufficient(
