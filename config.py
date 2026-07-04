@@ -128,7 +128,7 @@ CONFIG = {
         #   "transformers"— local HuggingFace seq2seq model (e.g. flan-t5).
         #   "openai"      — OpenAI Chat Completions API (needs OPENAI_API_KEY).
         #   "ollama"      — local Ollama server (uses ollama_url / llm_model).
-        "backend": "extractive",
+        "backend": "ollama",
 
         # transformers backend
         "hf_model": "google/flan-t5-base",

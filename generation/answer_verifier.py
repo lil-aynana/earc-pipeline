@@ -27,6 +27,7 @@ from typing import Any, Dict, List
 from config import CONFIG
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+_CITATION_RE = re.compile(r"\[\d+\]")
 
 # Lightweight stop-word list so common function words don't inflate overlap.
 _STOPWORDS = frozenset(
@@ -41,15 +42,70 @@ _STOPWORDS = frozenset(
 
 
 def _content_tokens(text: str) -> List[str]:
-    """Lower-case alphanumeric tokens with stop-words removed."""
-    return [t for t in _TOKEN_RE.findall((text or "").lower()) if t not in _STOPWORDS]
+    """Lower-case alphanumeric tokens with stop-words and citation markers removed."""
+    text = _CITATION_RE.sub(" ", text or "")
+    return [
+        t for t in _TOKEN_RE.findall(text.lower())
+        if t not in _STOPWORDS
+    ]
 
 
 def _split_sentences(text: str) -> List[str]:
-    """Naive, dependency-free sentence splitter."""
-    # strip citation markers before splitting so "[1]." doesn't fragment.
+    """
+    Split the answer into logical sentences while keeping citation markers
+    attached to the sentence they belong to.
+
+    Example
+    -------
+    Input:
+        Python was created by Guido van Rossum. [1]
+        Python was first released in 1991. [2]
+
+    Output:
+        [
+            "Python was created by Guido van Rossum. [1]",
+            "Python was first released in 1991. [2]"
+        ]
+    """
     pieces = re.split(r"(?<=[.!?])\s+", (text or "").strip())
-    return [p.strip() for p in pieces if p.strip()]
+
+    merged: List[str] = []
+
+    for piece in pieces:
+        piece = piece.strip()
+
+        if not piece:
+            continue
+
+        # Piece starts with a citation marker.
+        # Example:
+        # "[1] Python was first released in 1991."
+        m = re.match(r"^(\[\d+\])\s*(.*)$", piece)
+
+        if m and merged:
+            citation = m.group(1)
+            remainder = m.group(2)
+
+            # Attach citation to previous sentence.
+            merged[-1] += f" {citation}"
+
+            # Remaining text becomes the next sentence.
+            if remainder:
+                merged.append(remainder)
+
+            continue
+
+        # Standalone citation.
+        # Example:
+        # "[2]"
+        if re.fullmatch(r"\[\d+\]", piece):
+            if merged:
+                merged[-1] += f" {piece}"
+            continue
+
+        merged.append(piece)
+
+    return merged
 
 
 def _cited_markers(text: str) -> List[int]:
@@ -62,46 +118,64 @@ def verify(
     citations: List[Dict[str, Any]],
     evidence_context: str,
 ) -> Dict[str, Any]:
-    """Assess grounding of ``answer`` against the evidence.
+    """Assess grounding of ``answer`` against the evidence."""
 
-    Args:
-        answer: The Layer 12 answer text (may contain ``[n]`` markers).
-        citations: Layer 11 citation metadata (one entry per marker).
-        evidence_context: The concatenated evidence text used in the prompt.
-
-    Returns:
-        A dict describing grounding, faithfulness, citation validity and any
-        unsupported answer sentences.
-    """
     threshold = float(
-        CONFIG.get("generation", {}).get("grounding_overlap_threshold", 0.5)
+        CONFIG.get("generation", {}).get(
+            "grounding_overlap_threshold",
+            0.5,
+        )
     )
 
     evidence_tokens = set(_content_tokens(evidence_context))
     valid_markers = {c["marker"] for c in citations}
 
     sentences = _split_sentences(answer)
+
     supported = 0
     unsupported: List[str] = []
     overlaps: List[float] = []
 
     for sent in sentences:
         tokens = _content_tokens(sent)
+
         if not tokens:
             continue
-        overlap = sum(1 for t in tokens if t in evidence_tokens) / len(tokens)
+
+        overlap = sum(
+            1 for t in tokens if t in evidence_tokens
+        ) / len(tokens)
+
         overlaps.append(overlap)
+
         if overlap >= threshold:
             supported += 1
         else:
             unsupported.append(sent)
 
     scored_sentences = len(overlaps)
-    faithfulness = (supported / scored_sentences) if scored_sentences else 0.0
-    mean_overlap = (sum(overlaps) / scored_sentences) if scored_sentences else 0.0
+
+    faithfulness = (
+        supported / scored_sentences
+        if scored_sentences
+        else 0.0
+    )
+
+    mean_overlap = (
+        sum(overlaps) / scored_sentences
+        if scored_sentences
+        else 0.0
+    )
 
     used_markers = _cited_markers(answer)
-    invalid_markers = sorted({m for m in used_markers if m not in valid_markers})
+
+    invalid_markers = sorted(
+        {
+            m
+            for m in used_markers
+            if m not in valid_markers
+        }
+    )
 
     return {
         "grounded": bool(scored_sentences) and not unsupported,
