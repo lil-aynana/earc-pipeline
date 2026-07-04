@@ -14,6 +14,7 @@ from typing import Any
 import networkx as nx
 import numpy as np
 import spacy
+import copy
 
 from config import CONFIG
 
@@ -217,6 +218,10 @@ class ReasoningChainGraph:
         """
         if not sentences:
             return sentences
+
+        
+        # Make a deep copy so Layer 6 output remains unchanged
+        sentences = copy.deepcopy(sentences)
 
         # Lightweight input validation
         for i, sent in enumerate(sentences):

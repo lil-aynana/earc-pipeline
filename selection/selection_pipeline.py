@@ -175,11 +175,12 @@ def run(
         layer7_output,
     )
 
-    print("=" * 80)
-    print("LAYER 8 OUTPUT")
-    print("=" * 80)
-    print(layer8_output)
-    print("=" * 80)
+    print("Layer 8 keys:", layer8_output.keys())
+
+    # Call validator directly
+    evidence_diversity_guard._validate_layer8_output(layer8_output)
+
+    print("Layer 9 validation PASSED")
 
     layer9_output = _run_layer(
         "Layer 9 (evidence_diversity_guard)",
