@@ -175,6 +175,12 @@ def run(
         layer7_output,
     )
 
+    print("=" * 80)
+    print("LAYER 8 OUTPUT")
+    print("=" * 80)
+    print(layer8_output)
+    print("=" * 80)
+
     layer9_output = _run_layer(
         "Layer 9 (evidence_diversity_guard)",
         evidence_diversity_guard.run,

@@ -133,7 +133,7 @@ def run(
     layer7_stats: dict[str, Any] = layer7_output.get("stats", {})
 
     if not sentences:
-        return {"sentences": [], "stats": layer7_stats}
+        return {"selected_sentences": [], "candidate_sentences": [], "stats": layer7_stats}
 
     _validate(sentences)
 
@@ -171,7 +171,7 @@ def run(
             "bridge_selected": sum(1 for s in sentences if s["is_bridge"]),
             "non_bridge_selected": sum(1 for s in sentences if not s["is_bridge"]),
         }
-        return {"sentences": sentences, "stats": {**layer7_stats, "budget": budget_stats}}
+        return {"selected_sentences": sentences, "candidate_sentences": [], "stats": {**layer7_stats, "budget": budget_stats}}
 
     # --- Steps 4–5: split and sort both groups by score descending -------
     bridge: list[dict[str, Any]] = sorted(

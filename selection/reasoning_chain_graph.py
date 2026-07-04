@@ -374,3 +374,19 @@ class ReasoningChainGraph:
         if norm_a == 0.0 or norm_b == 0.0:
             return 0.0
         return float(np.dot(a, b) / (norm_a * norm_b))
+
+    # ---------------------------------------------------------------------------
+    # Module-level public entry point
+    # ---------------------------------------------------------------------------
+
+def run(
+    query_analysis: dict[str, Any],
+    sentences: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Module-level wrapper used by selection_pipeline.py.
+
+    Creates a ReasoningChainGraph instance and executes Layer 7.
+    """
+    graph = ReasoningChainGraph()
+    return graph.run(query_analysis, sentences)
