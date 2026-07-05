@@ -1,49 +1,38 @@
-
 # scoring/query_first_embedder.py
-
+ 
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from config import CONFIG
-
-
+ 
+ 
 class QueryFirstEmbedder:
     """
     Novel technique: embed sentences jointly with the query
     to capture query-specific relevance in the embedding space.
     """
-
+ 
     def __init__(self):
         print(f"Loading embedding model: {CONFIG['embedding_model']}...")
         self.model = SentenceTransformer(CONFIG['embedding_model'])
         self.cache = {}  # Store embeddings to avoid recomputation
         print("QueryFirstEmbedder ready")
-
-    def embed_sentences(
-        self,
-        query: str,
-        sentences: list[dict],
-        batch_size: int = 64
-    ) -> list[dict]:
+ 
+    def embed_sentences(self, query: str, sentences: list[dict], batch_size: int = 64):
         """
         Embed all sentences jointly with the query.
-
+ 
         Args:
             query: The user's question
             sentences: List of sentence dicts from retrieval pipeline
             batch_size: Number of sentences to encode at once
-
+ 
         Returns:
-            Same sentence list with 'embedding' field filled
+            (sentences, stats) - same sentence list with 'embedding' filled, plus a stats dict
         """
         print(f"\nEmbedding {len(sentences)} sentences with query-first technique...")
-
-        # Build joint input strings: "[query] [SEP] [sentence]"
-        joint_inputs = []
-        for sent in sentences:
-            joint_text = f"{query} [SEP] {sent['text']}"
-            joint_inputs.append(joint_text)
-
-        # Encode all at once in batches
+ 
+        joint_inputs = [f"{query} [SEP] {sent['text']}" for sent in sentences]
+ 
         embeddings = self.model.encode(
             joint_inputs,
             batch_size=batch_size,
@@ -51,21 +40,29 @@ class QueryFirstEmbedder:
             convert_to_numpy=True,
             normalize_embeddings=True  # L2 normalize for cosine similarity
         )
-
-        # Attach embeddings to sentence objects
+ 
         for i, sent in enumerate(sentences):
             sent['embedding'] = embeddings[i].astype('float32')
-            # Store in cache using sentence text as key
             cache_key = f"{query}||{sent['text']}"
             self.cache[cache_key] = embeddings[i]
-
-        print(f"✓ Embedded {len(sentences)} sentences")
-        return sentences
-
+ 
+        print(f"Embedded {len(sentences)} sentences")
+ 
+        stats = {
+            "step": 4,
+            "total_embedded": len(sentences),
+            # FIX: derive dim from the actual output instead of hardcoding 384,
+            # so this doesn't silently go stale if CONFIG['embedding_model'] changes.
+            "embedding_dim": int(embeddings.shape[1]) if len(embeddings) else 0,
+            "sample_norm": round(float(np.linalg.norm(sentences[0]['embedding'])), 4) if sentences else 0,
+        }
+        print("\n=== STEP 4 OUTPUT ===")
+        for k, v in stats.items():
+            print(f"  {k}: {v}")
+        return sentences, stats
+ 
     def get_query_embedding(self, query: str) -> np.ndarray:
-        """
-        Get standalone query embedding for scoring comparisons.
-        """
+        """Get standalone query embedding for scoring comparisons."""
         embedding = self.model.encode(
             [query],
             convert_to_numpy=True,
