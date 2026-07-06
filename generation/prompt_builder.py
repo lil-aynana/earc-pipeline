@@ -202,6 +202,35 @@ def build_prompt(
     """
     ctx = build_context(selected_sentences, query_type)
 
+
+   print("\n" + "=" * 80)
+print("LAYER 11 : PROMPT BUILDER")
+print("=" * 80)
+
+print(f"Query            : {query}")
+print(f"Query Type       : {query_type}")
+print(f"Has Negation     : {has_negation}")
+print(f"Selected Evidence: {len(selected_sentences)}")
+
+
+
+
+print("\nEvidence passed to Prompt Builder")
+print("-" * 80)
+
+for i, sent in enumerate(ctx["evidence"], 1):
+    print(f"[{i}]")
+    print(f"Score   : {sent.get('score', 0):.3f}")
+    print(f"Bridge  : {sent.get('is_bridge', False)}")
+    print(f"Doc ID  : {sent.get('doc_id')}")
+    print(f"Text    : {sent.get('text')}")
+    print()
+
+
+
+
+   
+
     if not ctx["evidence"]:
         prompt = (
             "You are a careful question-answering assistant.\n\n"
