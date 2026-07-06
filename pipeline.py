@@ -106,7 +106,7 @@ class EARCPipeline:
         sentences, query_info = self.retrieval_layer.retrieve(query)
 
         # Stage 4–6: Scoring 
-        sentences = self.scoring_pipeline.score(sentences, query_info)
+        sentences, scoring_stats = self.scoring_pipeline.run(query=query_info["query"], query_type=query_info["query_type"],sentences=sentences,)
         scored_records = self.scoring_pipeline.to_selection_records(sentences)
 
         # Stage 7–10: Selection  
