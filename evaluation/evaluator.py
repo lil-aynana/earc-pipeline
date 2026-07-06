@@ -112,12 +112,14 @@ def _selected_texts(result: Dict[str, Any]) -> str:
 
 
 def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
-    """Run the pipeline on a single QA pair and compute per-query metrics.
-
-    Returns a per-example record. On failure, returns a record with
-    ``error`` set so a single bad example never aborts the whole run.
-    """
-    question = qa["question"]
+    """Run the pipeline on a single QA pair and compute per-query metrics."""
+    question = qa.get("question")
+    if question is None:
+        return {
+            "question_id": qa.get("question_id"),
+            "dataset": qa.get("dataset"),
+            "error": "KeyError: QA pair missing 'question' field",
+        }
     gold = qa.get("answers", []) or []
 
     start = time.perf_counter()
@@ -132,15 +134,16 @@ def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
     latency = time.perf_counter() - start
 
     answer = result.get("answer", "")
-    verification = result.get("generation", {}).get("verification", {})
+    generation = result.get("generation", {})
+    verification = generation.get("verification", {})
+
+    is_refusal = bool(verification.get("is_refusal", False))
+    raw_faithfulness = verification.get("faithfulness", 0.0)
+    faithfulness = None if raw_faithfulness is None else float(raw_faithfulness)
 
     retrieved_tokens = _retrieved_token_count(result)
     selected_tokens = _selected_token_count(result)
 
-    # Retrieval-recall: was the gold answer actually present in the evidence?
-    # This separates retrieval/selection quality from answer formatting — a
-    # low EM with high answer_in_retrieved means the answer-generation step
-    # (not retrieval) is the bottleneck.
     answer_in_retrieved = metrics.answer_contains_gold(_retrieved_texts(result), gold)
     answer_in_selected = metrics.answer_contains_gold(_selected_texts(result), gold)
 
@@ -151,13 +154,15 @@ def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
         "question": question,
         "gold_answers": gold,
         "answer": answer,
+        "backend": generation.get("backend"),
         "exact_match": metrics.exact_match(answer, gold),
         "f1": metrics.f1_score(answer, gold),
         "contains_gold": metrics.answer_contains_gold(answer, gold),
         "answer_in_retrieved": answer_in_retrieved,
         "answer_in_selected": answer_in_selected,
         "grounded": bool(verification.get("grounded", False)),
-        "faithfulness": float(verification.get("faithfulness", 0.0) or 0.0),
+        "faithfulness": faithfulness,
+        "is_refusal": is_refusal,
         "retrieved_tokens": retrieved_tokens,
         "selected_tokens": selected_tokens,
         "compression_ratio": metrics.compression_ratio(retrieved_tokens, selected_tokens),
@@ -167,7 +172,8 @@ def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _mean(values: List[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
+    clean = [v for v in values if v is not None]
+    return sum(clean) / len(clean) if clean else 0.0
 
 
 def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -176,6 +182,8 @@ def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     errored = [r for r in records if "error" in r]
 
     def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        faithfulness_values = [r.get("faithfulness") for r in rows]
+        n_faithfulness_scored = sum(1 for v in faithfulness_values if v is not None)
         return {
             "count": len(rows),
             "exact_match": _mean([r["exact_match"] for r in rows]),
@@ -184,7 +192,9 @@ def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             "answer_in_retrieved": _mean([1.0 if r["answer_in_retrieved"] else 0.0 for r in rows]),
             "answer_in_selected": _mean([1.0 if r["answer_in_selected"] else 0.0 for r in rows]),
             "grounded_rate": _mean([1.0 if r["grounded"] else 0.0 for r in rows]),
-            "faithfulness": _mean([r["faithfulness"] for r in rows]),
+            "faithfulness": _mean(faithfulness_values),
+            "faithfulness_n": n_faithfulness_scored,
+            "refusal_rate": _mean([1.0 if r.get("is_refusal") else 0.0 for r in rows]),
             "compression_ratio": _mean([r["compression_ratio"] for r in rows]),
             "mean_selected": _mean([r["selected_count"] for r in rows]),
             "mean_retrieved_tokens": _mean([r["retrieved_tokens"] for r in rows]),
@@ -204,7 +214,6 @@ def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "n_errors": len(errored),
         "errors": errored[:20],
     }
-
 
 def run_evaluation(
     pipe: Any,
