@@ -5,12 +5,13 @@ RetrievalLayer — top-level interface for Module 1 (Stages 1, 2, 3).
 
 Production usage (in-RAM handoff to Module 2):
     layer = RetrievalLayer(faiss_index, bm25_index, all_chunks, all_metadata, model)
-    sentences, query_info = layer.retrieve(query)
-    # pass directly to Module 2 — no pickle, no disk I/O
+    m2_input, query_info = layer.retrieve(query)
 
-sentences  → List[SentenceObject]  (Module 2 fills embeddings + scores)
-query_info → dict {query, query_type, keywords, entities, has_negation}
-             propagated unchanged through all downstream modules
+    m2_input   → List[dict]  — exact format Module 2 expects, in RAM, no pickle
+    query_info → dict {query, query_type, keywords, entities, has_negation}
+
+If you need the internal SentenceObject list (for tests / Streamlit UI):
+    sentences, query_info = layer.retrieve_as_objects(query)
 """
 
 import logging
@@ -55,20 +56,8 @@ class RetrievalLayer:
             faiss_index, bm25_index, all_chunks, all_metadata, embed_model
         )
 
-    def retrieve(self, query: str) -> Tuple[List[SentenceObject], Dict]:
-        """
-        Run Stage 1 → Stage 2 → Stage 3 and return Module 1 output.
-
-        Parameters
-        ----------
-        query : raw user query string
-
-        Returns
-        -------
-        (sentences, query_info)
-        sentences  : List[SentenceObject], embedding=None on all objects
-        query_info : dict with keys query, query_type, keywords, entities, has_negation
-        """
+    def _run_stages(self, query: str) -> Tuple[List[SentenceObject], Dict]:
+        """Internal: run Stage 1 → 2 → 3, return (sentences, query_info)."""
         log.info('=' * 60)
         log.info('Query: %r', query)
         t0 = time.time()
@@ -90,3 +79,35 @@ class RetrievalLayer:
         )
         log.info('=' * 60)
         return sentences, query_info
+
+    def retrieve(self, query: str) -> Tuple[List[dict], Dict]:
+        """
+        Run Stage 1 → 2 → 3 and return Module 2-compatible output.
+
+        This is the production handoff method.
+        Everything is in RAM — no pickle, no disk I/O.
+
+        Returns
+        -------
+        (m2_input, query_info)
+
+        m2_input   : List[dict] — each dict matches Module 2's input format exactly
+        query_info : dict — {query, query_type, keywords, entities, has_negation}
+                     propagated unchanged through all downstream modules
+        """
+        sentences, query_info = self._run_stages(query)
+        m2_input = [s.to_m2_dict() for s in sentences]
+        return m2_input, query_info
+
+    def retrieve_as_objects(self, query: str) -> Tuple[List[SentenceObject], Dict]:
+        """
+        Same as retrieve() but returns internal SentenceObject list.
+
+        Use this in:
+        - Unit tests (test_query_analyser.py, test_segmenter.py)
+        - Streamlit UI (ui/app.py)
+        - Notebooks for inspection / debugging
+
+        NOT the production path to Module 2 — use retrieve() for that.
+        """
+        return self._run_stages(query)
