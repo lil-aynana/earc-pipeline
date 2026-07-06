@@ -107,10 +107,10 @@ class EARCPipeline:
 
         # Stage 4–6: Scoring 
         sentences, scoring_stats = self.scoring_pipeline.run(query=query_info["query"], query_type=query_info["query_type"],sentences=sentences,)
-        scored_records = self.scoring_pipeline.to_selection_records(sentences)
+        #scored_records = self.scoring_pipeline.to_selection_records(sentences)
 
         # Stage 7–10: Selection  
-        selection_output = self.selection_pipeline.run(query_info, scored_records)
+        selection_output = self.selection_pipeline.run(query_info, sentences)
 
         # Stage 10–13: Generation 
         generation_output = self.generation_pipeline.generate(
