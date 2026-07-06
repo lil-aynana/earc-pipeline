@@ -73,15 +73,15 @@ class EARCPipeline:
         )
 
         # Module 2 — Scoring (stages 4-6)
-        #from scoring.scoring_pipeline import ScoringPipeline
+        from scoring.scoring_pipeline import ScoringPipeline
         self.scoring_pipeline = ScoringPipeline()
 
         # Module 3 — Selection (stages 7-10)
-        #from selection.selection_pipeline import SelectionPipeline
+        from selection.selection_pipeline import SelectionPipeline
         self.selection_pipeline = SelectionPipeline()
 
         # Module 4 — Generation (plug in when ready)
-        # from generation.generation_pipeline import GenerationPipeline
+        from generation.generation_pipeline import GenerationPipeline
         self.generation_pipeline = GenerationPipeline()
 
         log.info('EARCPipeline ready.')
