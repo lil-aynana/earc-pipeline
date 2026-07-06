@@ -77,8 +77,10 @@ class EARCPipeline:
         # self.scoring_pipeline = ScoringPipeline(embed_model)
 
         # Module 3 — Selection (plug in when ready)
-        # from selection.selection_pipeline import SelectionPipeline
+        #from selection.selection_pipeline import SelectionPipeline
+        from selection.selection_pipeline import run as selection_run
         # self.selection_pipeline = SelectionPipeline()
+        
 
         # Module 4 — Generation (plug in when ready)
         from generation.generation_pipeline import GenerationPipeline
@@ -106,6 +108,7 @@ class EARCPipeline:
 
         # Stage 7–10: Selection  (stub — wire in Module 3 here)
         # selected = self.selection_pipeline.select(sentences, query_info)
+        selection_output=selection_run(query_info,sentences,)
 
         # Stage 11–13: Generation
         generation_output = self.generation_pipeline.generate(query_info,sentences,)
@@ -114,8 +117,9 @@ class EARCPipeline:
         'query': query,
         'query_info': query_info,
         'sentences': sentences,
-
-        # Module 4 output
+        "selected_sentences": selection_output["selected_sentences"],
+        "candidate_sentences": selection_output["candidate_sentences"],
+        "selection_stats": selection_output["stats"],
         'answer': generation_output['answer'],
         'generation': generation_output,
     }
