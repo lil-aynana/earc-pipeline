@@ -548,6 +548,28 @@ def _build_diversity_stats(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def _annotate_sentence_terms(
+    sentences: List[Dict[str, Any]],
+    entities: List[str],
+    keywords: List[str],
+) -> None:
+    """
+    Attach the query entities/keywords covered by each sentence.
+    """
+
+    for sentence in sentences:
+        sentence["entities"] = [
+            entity
+            for entity in entities
+            if _term_in_sentence(entity, sentence["text"])
+        ]
+
+        sentence["keywords"] = [
+            keyword
+            for keyword in keywords
+            if _term_in_sentence(keyword, sentence["text"])
+        ]
+
 def run(query_analysis: Dict[str, Any], layer8_output: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute Layer 9 (Evidence Diversity Guard) of the EARC Selection module.
@@ -596,6 +618,18 @@ def run(query_analysis: Dict[str, Any], layer8_output: Dict[str, Any]) -> Dict[s
 
     final_selected, final_candidates, swap_count = _run_replacement_loop(
         original_selected, original_candidates, entities, keywords, max_iterations
+    )
+
+    _annotate_sentence_terms(
+        final_selected,
+        entities,
+        keywords,
+    )
+
+    _annotate_sentence_terms(
+        final_candidates,
+        entities,
+        keywords,
     )
 
     diversity_stats = _build_diversity_stats(
