@@ -2,19 +2,6 @@
 pipeline.py
 ────────────
 EARC Pipeline — top-level entry point.
-
-Initialises all module artifacts once and exposes a single run(query) function
-that chains Module 1 → Module 2 → Module 3 → Module 4 in RAM.
-
-Module 2 (scoring), Module 3 (selection), and Module 4 (generation) must each
-expose a compatible pipeline class; stubs are provided below until those modules
-are implemented by teammates.
-
-Usage
------
-    from pipeline import EARCPipeline
-    pipe = EARCPipeline()
-    result = pipe.run("Who invented the telephone?")
 """
 
 import logging
@@ -30,119 +17,144 @@ from retrieval.retrieval_config import (
     METADATA_DIR,
 )
 
+# Module 2
+from scoring.scoring_pipeline import run as scoring_run
+
+# Module 3
+from selection.selection_pipeline import run as selection_run
+
+# Module 4
+from generation.generation_pipeline import GenerationPipeline
+
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s  %(levelname)-8s  %(message)s',
-    datefmt='%H:%M:%S',
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%H:%M:%S",
 )
-log = logging.getLogger('EARC')
+log = logging.getLogger("EARC")
 
 
 class EARCPipeline:
     """
     End-to-end EARC pipeline.
-
-    Loads all corpus artifacts once at __init__ time.
-    Downstream modules (2, 3, 4) are plugged in as they are implemented.
-
-    Parameters
-    ----------
-    faiss_path       : override default FAISS index path
-    bm25_path        : override default BM25 index path
-    chunks_dir       : override default chunks shard directory
-    metadata_dir     : override default metadata shard directory
-    embed_model_name : override default embedding model name
     """
 
     def __init__(
         self,
-        faiss_path       : Path = FAISS_PATH,
-        bm25_path        : Path = BM25_PATH,
-        chunks_dir       : Path = CHUNKS_DIR,
-        metadata_dir     : Path = METADATA_DIR,
-        embed_model_name : str  = EMBED_MODEL,
+        faiss_path: Path = FAISS_PATH,
+        bm25_path: Path = BM25_PATH,
+        chunks_dir: Path = CHUNKS_DIR,
+        metadata_dir: Path = METADATA_DIR,
+        embed_model_name: str = EMBED_MODEL,
     ):
-        faiss_index, bm25_index, all_chunks, all_metadata, embed_model = \
-            load_corpus_artifacts(
-                faiss_path, bm25_path, chunks_dir, metadata_dir, embed_model_name
-            )
 
-        # Module 1 — Retrieval Layer (your module)
-        self.retrieval_layer = RetrievalLayer(
-            faiss_index, bm25_index, all_chunks, all_metadata, embed_model
+        (
+            faiss_index,
+            bm25_index,
+            all_chunks,
+            all_metadata,
+            embed_model,
+        ) = load_corpus_artifacts(
+            faiss_path,
+            bm25_path,
+            chunks_dir,
+            metadata_dir,
+            embed_model_name,
         )
 
-        # Module 2 — Scoring (plug in when ready)
-        from scoring.scoring_pipeline import scoring_run
-        # self.scoring_pipeline = ScoringPipeline(embed_model)
+        # Module 1
+        self.retrieval_layer = RetrievalLayer(
+            faiss_index,
+            bm25_index,
+            all_chunks,
+            all_metadata,
+            embed_model,
+        )
 
-        # Module 3 — Selection (plug in when ready)
-        #from selection.selection_pipeline import SelectionPipeline
-        from selection.selection_pipeline import run as selection_run
-        # self.selection_pipeline = SelectionPipeline()
-        
-
-        # Module 4 — Generation (plug in when ready)
-        from generation.generation_pipeline import GenerationPipeline
+        # Module 4
         self.generation_pipeline = GenerationPipeline()
 
-        log.info('EARCPipeline ready.')
+        log.info("EARCPipeline ready.")
 
     def run(self, query: str) -> dict:
         """
-        Run the full pipeline for a single query.
-
-        Returns
-        -------
-        dict with at minimum:
-            query      : str
-            query_info : dict (query_type, keywords, entities, has_negation)
-            sentences  : List[SentenceObject]   ← Module 1 output
-            # answer   : str                    ← added when Module 4 is wired in
+        Run the complete EARC pipeline.
         """
-        # Stage 1–3: Retrieval
+
+        # ---------------------------------------------------------
+        # Layers 1–3 : Retrieval
+        # ---------------------------------------------------------
         sentences, query_info = self.retrieval_layer.retrieve(query)
 
-        # Stage 4–6: Scoring  (stub — wire in Module 2 here)
-        # sentences = self.scoring_pipeline.score(sentences, query_info)
+        # ---------------------------------------------------------
+        # Layers 4–6 : Scoring
+        # ---------------------------------------------------------
         scoring_output = scoring_run(query_info, sentences)
-        sentences = scoring_output["sentences"]
 
-        # Stage 7–10: Selection  (stub — wire in Module 3 here)
-        # selected = self.selection_pipeline.select(sentences, query_info)
-        selection_output=selection_run(query_info,sentences,)
+        scored_sentences = scoring_output["sentences"]
 
-        # Stage 11–13: Generation
-        generation_output = self.generation_pipeline.generate(query_info,sentences,)
+        # ---------------------------------------------------------
+        # Layers 7–10 : Selection
+        # ---------------------------------------------------------
+        selection_output = selection_run(
+            query_info,
+            scored_sentences,
+        )
 
+        # ---------------------------------------------------------
+        # Layers 11–13 : Generation
+        # ---------------------------------------------------------
+        generation_output = self.generation_pipeline.generate(
+            query_info,
+            selection_output["selected_sentences"],
+        )
+
+        # ---------------------------------------------------------
+        # Final Output
+        # ---------------------------------------------------------
         return {
-        'query': query,
-        'query_info': query_info,
-        'sentences': sentences,
-        "scoring_stats": scoring_output["step_stats"],
-        "selected_sentences": selection_output["selected_sentences"],
-        "candidate_sentences": selection_output["candidate_sentences"],
-        "selection_stats": selection_output["stats"],
-        'answer': generation_output['answer'],
-        'generation': generation_output,
-    }
+            "query": query,
+            "query_info": query_info,
+
+            # Retrieval + Scoring
+            "sentences": scored_sentences,
+            "scoring_stats": scoring_output["step_stats"],
+
+            # Selection
+            "selected_sentences": selection_output["selected_sentences"],
+            "candidate_sentences": selection_output["candidate_sentences"],
+            "selection_stats": selection_output["stats"],
+
+            # Generation
+            "answer": generation_output["answer"],
+            "generation": generation_output,
+        }
 
 
-# ── CLI smoke test ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
+# CLI smoke test
+# -------------------------------------------------------------
+if __name__ == "__main__":
 
-if __name__ == '__main__':
     pipe = EARCPipeline()
 
     test_queries = [
-        'Who invented the telephone?',
-        'What did Marie Curie and Albert Einstein both contribute to physics?',
-        'What countries are not members of NATO?',
+        "Who invented the telephone?",
+        "What did Marie Curie and Albert Einstein both contribute to physics?",
+        "What countries are not members of NATO?",
     ]
 
     for q in test_queries:
+
         result = pipe.run(q)
+
         print(f"\nQuery      : {result['query']}")
         print(f"Type       : {result['query_info']['query_type']}")
         print(f"Sentences  : {len(result['sentences'])}")
-        entity_count = sum(1 for s in result['sentences'] if s.contains_query_entity)
-        print(f"With entity: {entity_count}")
+        print(f"Selected   : {len(result['selected_sentences'])}")
+        print(f"Answer     : {result['answer']}")
+        print(
+            f"Grounded   : {result['generation']['verification']['grounded']} "
+            f"(faithfulness={result['generation']['verification']['faithfulness']})"
+        )
