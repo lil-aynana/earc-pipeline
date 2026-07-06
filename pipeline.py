@@ -81,8 +81,8 @@ class EARCPipeline:
         # self.selection_pipeline = SelectionPipeline()
 
         # Module 4 — Generation (plug in when ready)
-        # from generation.generation_pipeline import GenerationPipeline
-        # self.generation_pipeline = GenerationPipeline()
+        from generation.generation_pipeline import GenerationPipeline
+        self.generation_pipeline = GenerationPipeline()
 
         log.info('EARCPipeline ready.')
 
@@ -104,17 +104,21 @@ class EARCPipeline:
         # Stage 4–6: Scoring  (stub — wire in Module 2 here)
         # sentences = self.scoring_pipeline.score(sentences, query_info)
 
-        # Stage 7–9: Selection  (stub — wire in Module 3 here)
+        # Stage 7–10: Selection  (stub — wire in Module 3 here)
         # selected = self.selection_pipeline.select(sentences, query_info)
 
-        # Stage 10–12: Generation  (stub — wire in Module 4 here)
-        # answer = self.generation_pipeline.generate(selected, query_info)
+        # Stage 11–13: Generation
+        generation_output = self.generation_pipeline.generate(query_info,sentences,)
 
         return {
-            'query'     : query,
-            'query_info': query_info,
-            'sentences' : sentences,
-        }
+        'query': query,
+        'query_info': query_info,
+        'sentences': sentences,
+
+        # Module 4 output
+        'answer': generation_output['answer'],
+        'generation': generation_output,
+    }
 
 
 # ── CLI smoke test ─────────────────────────────────────────────────────────────
