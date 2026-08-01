@@ -72,26 +72,53 @@ def print_report(
 ) -> None:
     """Pretty-print a generation report to the terminal.
 
-    Shows the top-``top_k`` selected evidence sentences (ranked by score),
-    the generated answer, the backend used, and the Layer 13 verification
-    summary. This is a display-only helper — it performs no scoring, mutation,
-    or I/O beyond printing.
+    The evidence table is shown in the exact order the Layer 11 prompt was
+    built (anchor -> bridges -> supporting evidence), NOT re-sorted by score.
+    This means the ``Rank`` column matches the ``[n]`` citation markers used in
+    the answer. The order/markers come from ``generation_result["citations"]``
+    (populated by ``build_context``); if those are unavailable, it falls back
+    to score-descending order over ``selected_sentences``.
+
+    Also shows the generated answer, the backend used, and the Layer 13
+    verification summary. This is a display-only helper — it performs no
+    scoring, mutation, or I/O beyond printing.
     """
-    top = sorted(
-        selected_sentences,
-        key=lambda s: float(s.get("score", 0.0) or 0.0),
-        reverse=True,
-    )[:top_k]
+    citations = generation_result.get("citations")
+    if citations:
+        # Prompt-built order; ``marker`` is the citation number in the answer.
+        rows = [
+            (
+                c.get("marker"),
+                float(c.get("score", 0.0) or 0.0),
+                bool(c.get("is_bridge", False)),
+                str(c.get("text", "")).strip(),
+            )
+            for c in citations[:top_k]
+        ]
+    else:
+        # Fallback: no citation metadata, rank by score.
+        ordered = sorted(
+            selected_sentences,
+            key=lambda s: float(s.get("score", 0.0) or 0.0),
+            reverse=True,
+        )[:top_k]
+        rows = [
+            (
+                i,
+                float(s.get("score", 0.0) or 0.0),
+                bool(s.get("is_bridge", False)),
+                str(s.get("text", "")).strip(),
+            )
+            for i, s in enumerate(ordered, 1)
+        ]
 
     print("generation module")
     print(f"Query: {query}\n")
     print(f"{'Rank':<5} {'Score':<7} {'Bridge':<7} Evidence")
     print("-" * 70)
-    for rank, sent in enumerate(top, 1):
-        score = float(sent.get("score", 0.0) or 0.0)
-        bridge = "Yes" if sent.get("is_bridge", False) else "No"
-        text = str(sent.get("text", "")).strip()
-        print(f"{rank:<5} {score:<7.4f} {bridge:<7} {text}")
+    for marker, score, is_bridge, text in rows:
+        bridge = "Yes" if is_bridge else "No"
+        print(f"{marker:<5} {score:<7.4f} {bridge:<7} {text}")
 
     verification = generation_result.get("verification", {})
     print()
