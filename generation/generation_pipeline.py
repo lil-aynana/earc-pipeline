@@ -23,8 +23,13 @@ class GenerationPipeline:
         self,
         query_info: Dict[str, Any],
         selected_sentences: List[Dict[str, Any]],
+        verbose: bool = False,
     ) -> Dict[str, Any]:
-        """Run Layers 11-13 and return the answer plus supporting metadata."""
+        """Run Layers 11-13 and return the answer plus supporting metadata.
+
+        If ``verbose`` is True, a formatted generation report (top evidence,
+        answer, backend, verification) is printed to the terminal.
+        """
         query = query_info.get("query", "")
         query_type = query_info.get("query_type", "descriptive")
         has_negation = bool(query_info.get("has_negation", False))
@@ -44,7 +49,7 @@ class GenerationPipeline:
             gen["answer"], prompt_bundle["citations"], prompt_bundle["context"]
         )
 
-        return {
+        result = {
             "answer": gen["answer"],
             "backend": gen["backend"],
             "prompt": prompt_bundle["prompt"],
@@ -52,6 +57,11 @@ class GenerationPipeline:
             "citations": prompt_bundle["citations"],
             "verification": verification,
         }
+
+        if verbose:
+            print_report(query, selected_sentences, result)
+
+        return result
 
 
 def print_report(
