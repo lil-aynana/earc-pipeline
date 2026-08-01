@@ -52,3 +52,45 @@ class GenerationPipeline:
             "citations": prompt_bundle["citations"],
             "verification": verification,
         }
+
+
+def print_report(
+    query: str,
+    selected_sentences: List[Dict[str, Any]],
+    generation_result: Dict[str, Any],
+    top_k: int = 5,
+) -> None:
+    """Pretty-print a generation report to the terminal.
+
+    Shows the top-``top_k`` selected evidence sentences (ranked by score),
+    the generated answer, the backend used, and the Layer 13 verification
+    summary. This is a display-only helper — it performs no scoring, mutation,
+    or I/O beyond printing.
+    """
+    top = sorted(
+        selected_sentences,
+        key=lambda s: float(s.get("score", 0.0) or 0.0),
+        reverse=True,
+    )[:top_k]
+
+    print("generation module")
+    print(f"Query: {query}\n")
+    print(f"{'Rank':<5} {'Score':<7} {'Bridge':<7} Evidence")
+    print("-" * 70)
+    for rank, sent in enumerate(top, 1):
+        score = float(sent.get("score", 0.0) or 0.0)
+        bridge = "Yes" if sent.get("is_bridge", False) else "No"
+        text = str(sent.get("text", "")).strip()
+        print(f"{rank:<5} {score:<7.4f} {bridge:<7} {text}")
+
+    verification = generation_result.get("verification", {})
+    print()
+    print(f"Answer  : {generation_result.get('answer', '')}")
+    print(f"Backend : {generation_result.get('backend', '')}")
+    print()
+    print("Verification:")
+    print(f"  {'grounded':<20}: {verification.get('grounded')}")
+    print(f"  {'faithfulness':<20}: {verification.get('faithfulness')}")
+    print(f"  {'mean_overlap':<20}: {verification.get('mean_overlap')}")
+    print(f"  {'citation_count':<20}: {verification.get('citation_count')}")
+    print(f"  {'invalid_citations':<20}: {verification.get('invalid_citations')}")
