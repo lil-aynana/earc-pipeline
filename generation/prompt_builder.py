@@ -39,16 +39,19 @@ def _sanitize_evidence_text(text: str) -> str:
           unchanged.
         * Otherwise the final whitespace-delimited token is treated as a
           possible truncated word and removed, and a period is appended so the
-          sentence reads cleanly. If that would empty the string, the original
-          is returned unchanged.
+          sentence reads cleanly.
+        * If trimming the trailing partial word would remove more than half the
+          sentence, the truncation is too severe to safely repair — an empty
+          string is returned so the caller drops the sentence rather than risk
+          asserting a grammatically clean but factually incomplete claim.
     """
     text = (text or "").strip()
     if not text or text[-1] in _TERMINAL_PUNCT:
         return text
     # Trim a single trailing partial word, then re-terminate.
     trimmed = re.sub(r"\s+\S+$", "", text).rstrip()
-    if not trimmed:
-        return text
+    if not trimmed or len(trimmed) < 0.5 * len(text):
+        return ""
     if trimmed[-1] not in _TERMINAL_PUNCT:
         trimmed += "."
     return trimmed
@@ -64,6 +67,27 @@ def _max_context_sentences(query_type: str) -> int:
             gen_cfg.get("default_max_context_sentences", 8),
         )
     )
+
+
+def _dedupe_exact(
+    selected_sentences: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Drop exact-duplicate evidence sentences, keeping first occurrence.
+
+    Two sentences are considered duplicates when their whitespace-normalised,
+    lower-cased text is identical. This is a cheap guard against the same
+    sentence being surfaced twice (e.g. via different retrieval paths) and
+    wasting a citation slot; semantic/paraphrase dedup is intentionally out of
+    scope here.
+    """
+    seen: set = set()
+    deduped: List[Dict[str, Any]] = []
+    for s in selected_sentences:
+        key = re.sub(r"\s+", " ", str(s.get("text", "")).strip().lower())
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(s)
+    return deduped
 
 
 def _ordered_evidence(
@@ -84,6 +108,8 @@ def _ordered_evidence(
     """
     limit = _max_context_sentences(query_type)
 
+    selected_sentences = _dedupe_exact(selected_sentences)
+
     non_bridges = [s for s in selected_sentences if not s.get("is_bridge", False)]
     anchor = (
         max(non_bridges, key=lambda s: float(s.get("score", 0.0) or 0.0))
@@ -91,9 +117,21 @@ def _ordered_evidence(
         else None
     )
 
+    def _stable_key(s: Dict[str, Any]) -> tuple:
+        """Identity key that survives copying/serialisation of the dict."""
+        return (
+            str(s.get("doc_id", "")),
+            s.get("position", s.get("sent_idx", 0)) or 0,
+            str(s.get("text", "")),
+        )
+
+    # Compare by a stable key rather than object identity so anchor detection
+    # keeps working even if the sentence list is copied upstream.
+    anchor_key = _stable_key(anchor) if anchor is not None else None
+
     def sort_key(item):
         sent = item
-        is_anchor = anchor is not None and sent is anchor
+        is_anchor = anchor_key is not None and _stable_key(sent) == anchor_key
         is_bridge = bool(sent.get("is_bridge", False))
         score = float(sent.get("score", 0.0) or 0.0)
         doc_id = str(sent.get("doc_id", ""))
@@ -121,12 +159,17 @@ def build_context(
     lines: List[str] = []
     citations: List[Dict[str, Any]] = []
     evidence: List[Dict[str, Any]] = []
-    for i, sent in enumerate(ordered, 1):
+    marker = 1
+    for sent in ordered:
         text = _sanitize_evidence_text(str(sent.get("text", "")))
-        lines.append(f"[{i}] {text}")
+        if not text:
+            # Empty or unrecoverably truncated — drop it so it never gets a
+            # citation marker or an empty "[n] " line in the context block.
+            continue
+        lines.append(f"[{marker}] {text}")
         citations.append(
             {
-                "marker": i,
+                "marker": marker,
                 "doc_id": sent.get("doc_id"),
                 "dataset": sent.get("dataset"),
                 "title": sent.get("title"),
@@ -137,10 +180,13 @@ def build_context(
         )
         # Shallow-copy with sanitized text so downstream layers (e.g. the
         # extractive backend) reuse clean text without mutating the upstream
-        # selection objects.
+        # selection objects. ``marker`` is preserved so citations stay correct
+        # even when a non-contiguous subset is later stitched (negation path).
         ev = dict(sent)
         ev["text"] = text
+        ev["marker"] = marker
         evidence.append(ev)
+        marker += 1
 
     return {
         "context": "\n".join(lines),
@@ -211,8 +257,12 @@ def build_prompt(
         )
     else:
         prompt = (
-            "You are a careful question-answering assistant. Answer strictly "
-            "from the numbered evidence and never invent facts.\n\n"
+            "You are a careful question-answering assistant. Some of the "
+            "numbered evidence below may be irrelevant to the question — "
+            "ignore it. Answer strictly from the relevant evidence and never "
+            "invent facts or use outside knowledge. If the evidence does not "
+            "contain the answer, reply exactly: \"I don't have enough "
+            "information to answer.\" Do not guess.\n\n"
             "Evidence:\n"
             f"{ctx['context']}\n\n"
             f"Question: {query}\n\n"

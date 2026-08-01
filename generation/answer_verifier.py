@@ -9,11 +9,12 @@ the evidence assembled by Layer 11 and reports how well the answer is
 *grounded* in that evidence. It does NOT call an LLM, retrieve, rescore, or
 perform any I/O.
 
-For each answer sentence it measures the token overlap with the evidence
-context. A sentence whose content-word overlap meets a configurable
-threshold is considered "grounded". It also resolves the inline ``[n]``
-citation markers back to their source documents and flags any markers that
-point outside the available evidence range.
+For each answer sentence it measures the token overlap with the specific
+evidence sentence(s) that the sentence cites (falling back to the best single
+evidence match for uncited sentences). A sentence whose content-word overlap
+meets a configurable threshold is considered "grounded". It also resolves the
+inline ``[n]`` citation markers back to their source documents and flags any
+markers that point outside the available evidence range.
 
 Answers that are deliberate refusals (e.g. "I don't have enough information
 to answer") are detected up front and scored separately: declining to answer
@@ -44,20 +45,31 @@ _STOPWORDS = frozenset(
     """.split()
 )
 
-# Prefixes that identify a deliberate "no answer" response from
-# AnswerGenerator's own fallback paths (empty evidence, or a negated query the
-# evidence can't support). These are NOT hallucinations and must not be
+# Cues that identify a deliberate "no answer" / abstention response. These
+# are matched as substrings anywhere in the answer (not just as a prefix) so a
+# model that reasons its way to "we cannot determine this" at the END of a
+# longer explanation is still recognised as a refusal rather than being scored
+# as an ungrounded hallucination. These are NOT hallucinations and must not be
 # scored as ungrounded.
-_NO_ANSWER_PREFIXES = (
+_NO_ANSWER_CUES = (
     "i don't have enough information to answer",
     "the retrieved evidence describes the included/affirmative set",
+    "there is no information",
+    "no information available",
+    "we cannot determine",
+    "cannot be determined based on",
+    "cannot be reliably enumerated",
 )
 
 
 def _is_no_answer_response(answer: str) -> bool:
-    """True if ``answer`` is a deliberate refusal-to-answer, not a real claim."""
+    """True if the answer is substantially a refusal-to-answer.
+
+    Uses substring matching so a refusal is detected even when it is embedded
+    in a longer explanation rather than being the entire answer verbatim.
+    """
     normalized = (answer or "").strip().lower()
-    return any(normalized.startswith(prefix) for prefix in _NO_ANSWER_PREFIXES)
+    return any(cue in normalized for cue in _NO_ANSWER_CUES)
 
 
 def _content_tokens(text: str) -> List[str]:
@@ -137,7 +149,17 @@ def verify(
     citations: List[Dict[str, Any]],
     evidence_context: str,
 ) -> Dict[str, Any]:
-    """Assess grounding of ``answer`` against the evidence."""
+    """Assess grounding of ``answer`` against the evidence.
+
+    Grounding is checked *per-citation* rather than against the merged
+    evidence context: for each answer sentence, only the specific evidence
+    sentence(s) it cites are used to compute token overlap. This prevents an
+    answer from scoring as "grounded" merely by combining separate true facts
+    from different evidence sentences into one claim that no single sentence
+    actually supports. Uncited answer sentences fall back to the best single
+    evidence-sentence match, so they aren't unfairly zeroed out but also aren't
+    laundered through the full evidence union.
+    """
 
     # Refusal responses are correct-by-design, not ungrounded claims — score
     # them separately and skip the overlap machinery entirely.
@@ -163,8 +185,19 @@ def verify(
         )
     )
 
-    evidence_tokens = set(_content_tokens(evidence_context))
-    valid_markers = {c["marker"] for c in citations}
+    # Per-citation token sets, keyed by marker, built from the citation
+    # metadata Layer 11 already carries (no re-parsing of evidence_context).
+    citation_tokens = {
+        c["marker"]: set(_content_tokens(c.get("text", "")))
+        for c in citations
+    }
+    valid_markers = set(citation_tokens.keys())
+
+    # Fallback set, used only if there are no citations at all but the
+    # evidence context is non-empty.
+    fallback_tokens = (
+        set(_content_tokens(evidence_context)) if not citation_tokens else set()
+    )
 
     sentences = _split_sentences(answer)
 
@@ -178,9 +211,26 @@ def verify(
         if not tokens:
             continue
 
-        overlap = sum(
-            1 for t in tokens if t in evidence_tokens
-        ) / len(tokens)
+        cited = [m for m in _cited_markers(sent) if m in citation_tokens]
+
+        if cited:
+            # Only the specific evidence this sentence cites counts.
+            relevant_tokens: set = set()
+            for m in cited:
+                relevant_tokens |= citation_tokens[m]
+            overlap = sum(1 for t in tokens if t in relevant_tokens) / len(tokens)
+        elif citation_tokens:
+            # No citation on this sentence — measure against the single
+            # best-matching evidence sentence, not the full union.
+            overlap = max(
+                (
+                    sum(1 for t in tokens if t in ctoks) / len(tokens)
+                    for ctoks in citation_tokens.values()
+                ),
+                default=0.0,
+            )
+        else:
+            overlap = sum(1 for t in tokens if t in fallback_tokens) / len(tokens)
 
         overlaps.append(overlap)
 

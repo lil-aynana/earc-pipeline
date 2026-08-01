@@ -120,7 +120,14 @@ class AnswerGenerator:
 
     @staticmethod
     def _stitch(chosen: List[Dict[str, Any]]) -> str:
-        """Join evidence sentences into a cited answer string."""
+        """Join evidence sentences into a cited answer string.
+
+        Uses each sentence's original ``marker`` (assigned by Layer 11 in
+        ``build_context``) rather than re-numbering by position. This keeps
+        citations correct even when a non-contiguous subset of the evidence is
+        stitched — e.g. the negation path, which passes only the filtered
+        sentences that express an exclusion.
+        """
         parts: List[str] = []
         for i, sent in enumerate(chosen, 1):
             text = str(sent.get("text", "")).strip()
@@ -128,7 +135,8 @@ class AnswerGenerator:
                 continue
             if text[-1] not in ".!?":
                 text += "."
-            parts.append(f"{text} [{i}]")
+            marker = sent.get("marker", i)
+            parts.append(f"{text} [{marker}]")
 
         if not parts:
             return "I don't have enough information to answer."
@@ -153,11 +161,12 @@ class AnswerGenerator:
         lead = str(evidence[0].get("text", "")).strip() if evidence else ""
         if lead and lead[-1] not in ".!?":
             lead += "."
+        lead_marker = evidence[0].get("marker", 1) if evidence else 1
         return (
             "The retrieved evidence describes the included/affirmative set and "
             "does not directly state what is excluded, so the exclusion cannot "
             "be reliably enumerated from it. Most relevant evidence: "
-            f"{lead} [1]"
+            f"{lead} [{lead_marker}]"
         )
 
 
