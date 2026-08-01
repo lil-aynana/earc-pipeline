@@ -18,7 +18,7 @@ pure and deterministic: identical inputs always produce identical prompts.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from config import CONFIG
 
@@ -93,6 +93,7 @@ def _dedupe_exact(
 def _ordered_evidence(
     selected_sentences: List[Dict[str, Any]],
     query_type: str,
+    max_context: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Order evidence for the prompt: anchor first, then bridges, then support.
 
@@ -105,8 +106,17 @@ def _ordered_evidence(
 
     If every selected sentence is flagged as a bridge (no non-bridge anchor
     candidate exists), ordering falls back to plain score-descending order.
+
+    ``max_context`` overrides the per-query-type sentence cap when provided
+    (used by the standard-RAG baseline, which must keep the full retrieved
+    context uncompressed). When ``None`` the config cap for ``query_type``
+    applies.
     """
-    limit = _max_context_sentences(query_type)
+    limit = (
+        _max_context_sentences(query_type)
+        if max_context is None
+        else int(max_context)
+    )
 
     selected_sentences = _dedupe_exact(selected_sentences)
 
@@ -146,6 +156,7 @@ def _ordered_evidence(
 def build_context(
     selected_sentences: List[Dict[str, Any]],
     query_type: str = "descriptive",
+    max_context: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Build the numbered, citation-tagged evidence context block.
 
@@ -153,8 +164,10 @@ def build_context(
         ``context``   : str  — the formatted "[1] ... [2] ..." evidence text
         ``citations`` : list — per-marker citation metadata
         ``evidence``  : list — the ordered evidence dicts actually used
+
+    ``max_context`` overrides the per-query-type sentence cap when provided.
     """
-    ordered = _ordered_evidence(selected_sentences, query_type)
+    ordered = _ordered_evidence(selected_sentences, query_type, max_context)
 
     lines: List[str] = []
     citations: List[Dict[str, Any]] = []
@@ -239,14 +252,18 @@ def build_prompt(
     selected_sentences: List[Dict[str, Any]],
     query_type: str = "descriptive",
     has_negation: bool = False,
+    max_context: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Assemble the full LLM prompt for Layer 12.
 
     Returns a dict with ``prompt`` (the full instruction text the LLM
     receives), plus ``context``, ``citations`` and ``evidence`` carried
     through from :func:`build_context` so downstream layers can reuse them.
+
+    ``max_context`` overrides the per-query-type sentence cap when provided
+    (used by the standard-RAG baseline to keep the full retrieved context).
     """
-    ctx = build_context(selected_sentences, query_type)
+    ctx = build_context(selected_sentences, query_type, max_context)
 
     if not ctx["evidence"]:
         prompt = (

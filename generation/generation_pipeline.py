@@ -63,6 +63,39 @@ class GenerationPipeline:
 
         return result
 
+    def generate_baseline(
+        self,
+        query_info: Dict[str, Any],
+        retrieved_sentences: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Standard-RAG baseline: answer from ALL retrieved sentences.
+
+        Feeds the full retrieved context to the same generation backend used by
+        the EARC path, bypassing the Selection module (Layers 7-10) and the
+        per-query-type context cap. This is the conventional retrieve-then-stuff
+        pipeline the EARC method is compared against, so the evaluator can
+        quantify token reduction and any answer-quality trade-off.
+
+        Returns a dict with ``answer`` and ``backend`` (mirrors
+        :meth:`AnswerGenerator.generate`). No verification is run — the baseline
+        exists only for answer-quality and token-cost comparison.
+        """
+        query = query_info.get("query", "")
+        query_type = query_info.get("query_type", "descriptive")
+        has_negation = bool(query_info.get("has_negation", False))
+
+        prompt_bundle = prompt_builder.build_prompt(
+            query,
+            retrieved_sentences,
+            query_type,
+            has_negation=has_negation,
+            max_context=len(retrieved_sentences),
+        )
+        gen = self.generator.generate(
+            prompt_bundle, query, query_type, has_negation=has_negation
+        )
+        return {"answer": gen["answer"], "backend": gen["backend"]}
+
 
 def print_report(
     query: str,

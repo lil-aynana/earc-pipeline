@@ -78,13 +78,25 @@ def sample_qa_pairs(
     return rng.sample(pairs, n)
 
 
+def _field(s: Any, name: str, default: Any = "") -> Any:
+    """Read a field from a sentence that may be a dict or an attribute object.
+
+    Retrieved/scored sentences flow through the pipeline as plain dicts, so a
+    bare ``getattr`` silently returns the default and zeroes out every
+    retrieved-side metric. This helper handles both shapes.
+    """
+    if isinstance(s, dict):
+        return s.get(name, default)
+    return getattr(s, name, default)
+
+
 def _retrieved_token_count(result: Dict[str, Any]) -> int:
     """Total whitespace tokens across all scored (retrieved) sentences."""
     total = 0
     for s in result.get("sentences", []):
-        tc = getattr(s, "token_count", None)
+        tc = _field(s, "token_count", None)
         if tc is None:
-            tc = metrics.token_count(getattr(s, "text", ""))
+            tc = metrics.token_count(_field(s, "text", ""))
         total += int(tc or 0)
     return total
 
@@ -102,7 +114,7 @@ def _selected_token_count(result: Dict[str, Any]) -> int:
 
 def _retrieved_texts(result: Dict[str, Any]) -> str:
     """Concatenate all scored (retrieved) sentence texts into one string."""
-    return " ".join(str(getattr(s, "text", "")) for s in result.get("sentences", []))
+    return " ".join(str(_field(s, "text", "")) for s in result.get("sentences", []))
 
 
 def _selected_texts(result: Dict[str, Any]) -> str:
@@ -111,8 +123,15 @@ def _selected_texts(result: Dict[str, Any]) -> str:
 
 
 
-def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
-    """Run the pipeline on a single QA pair and compute per-query metrics."""
+def evaluate_one(pipe: Any, qa: Dict[str, Any], run_baseline: bool = True) -> Dict[str, Any]:
+    """Run the pipeline on a single QA pair and compute per-query metrics.
+
+    When ``run_baseline`` is True, a standard-RAG baseline answer is also
+    generated from the full retrieved context (no selection/compression) so the
+    EARC method's token reduction and answer-quality trade-off can be measured.
+    The baseline requires a second LLM call per query; set it False for a
+    faster EARC-only run.
+    """
     question = qa.get("question")
     if question is None:
         return {
@@ -147,7 +166,14 @@ def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
     answer_in_retrieved = metrics.answer_contains_gold(_retrieved_texts(result), gold)
     answer_in_selected = metrics.answer_contains_gold(_selected_texts(result), gold)
 
-    return {
+    # Context-token reduction of the EARC method vs. the standard-RAG baseline
+    # (which feeds all retrieved tokens to the LLM). Higher pct = more saving.
+    token_reduction = retrieved_tokens - selected_tokens
+    token_reduction_pct = (
+        100.0 * token_reduction / retrieved_tokens if retrieved_tokens > 0 else 0.0
+    )
+
+    record = {
         "question_id": qa.get("question_id"),
         "dataset": qa.get("dataset"),
         "query_type": result.get("query_info", {}).get("query_type"),
@@ -166,9 +192,37 @@ def evaluate_one(pipe: Any, qa: Dict[str, Any]) -> Dict[str, Any]:
         "retrieved_tokens": retrieved_tokens,
         "selected_tokens": selected_tokens,
         "compression_ratio": metrics.compression_ratio(retrieved_tokens, selected_tokens),
+        "token_reduction": token_reduction,
+        "token_reduction_pct": token_reduction_pct,
         "selected_count": len(result.get("selected_sentences", [])),
         "latency_sec": latency,
     }
+
+    if run_baseline:
+        try:
+            b_start = time.perf_counter()
+            b_gen = pipe.generation_pipeline.generate_baseline(
+                result.get("query_info", {}),
+                result.get("sentences", []),
+            )
+            b_latency = time.perf_counter() - b_start
+            b_answer = b_gen.get("answer", "")
+            record.update(
+                {
+                    "baseline_answer": b_answer,
+                    "baseline_backend": b_gen.get("backend"),
+                    "baseline_exact_match": metrics.exact_match(b_answer, gold),
+                    "baseline_f1": metrics.f1_score(b_answer, gold),
+                    "baseline_contains_gold": metrics.answer_contains_gold(b_answer, gold),
+                    # Standard RAG feeds the full retrieved context to the LLM.
+                    "baseline_context_tokens": retrieved_tokens,
+                    "baseline_latency_sec": b_latency,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - baseline is best-effort
+            record["baseline_error"] = f"{type(exc).__name__}: {exc}"
+
+    return record
 
 
 def _mean(values: List[float]) -> float:
@@ -184,6 +238,7 @@ def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         faithfulness_values = [r.get("faithfulness") for r in rows]
         n_faithfulness_scored = sum(1 for v in faithfulness_values if v is not None)
+        baseline_rows = [r for r in rows if "baseline_answer" in r]
         return {
             "count": len(rows),
             "exact_match": _mean([r["exact_match"] for r in rows]),
@@ -196,10 +251,18 @@ def aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
             "faithfulness_n": n_faithfulness_scored,
             "refusal_rate": _mean([1.0 if r.get("is_refusal") else 0.0 for r in rows]),
             "compression_ratio": _mean([r["compression_ratio"] for r in rows]),
+            "token_reduction_pct": _mean([r.get("token_reduction_pct") for r in rows]),
             "mean_selected": _mean([r["selected_count"] for r in rows]),
             "mean_retrieved_tokens": _mean([r["retrieved_tokens"] for r in rows]),
             "mean_selected_tokens": _mean([r["selected_tokens"] for r in rows]),
             "mean_latency_sec": _mean([r["latency_sec"] for r in rows]),
+            # Standard-RAG baseline (full retrieved context, no selection).
+            "baseline_count": len(baseline_rows),
+            "baseline_exact_match": _mean([r.get("baseline_exact_match") for r in baseline_rows]),
+            "baseline_f1": _mean([r.get("baseline_f1") for r in baseline_rows]),
+            "baseline_contains_gold": _mean([r.get("baseline_contains_gold") for r in baseline_rows]),
+            "baseline_mean_context_tokens": _mean([r.get("baseline_context_tokens") for r in baseline_rows]),
+            "baseline_mean_latency_sec": _mean([r.get("baseline_latency_sec") for r in baseline_rows]),
         }
 
     per_dataset: Dict[str, Any] = {}
@@ -223,6 +286,7 @@ def run_evaluation(
     seed: int = 42,
     output_path: Optional[Path] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    run_baseline: bool = True,
 ) -> Dict[str, Any]:
     """Run the full evaluation and return aggregated metrics.
 
@@ -237,6 +301,10 @@ def run_evaluation(
         seed: Sampling seed for reproducibility.
         output_path: If given, pickle the full results dict to this path.
         progress_callback: Optional ``fn(done, total)`` called per example.
+        run_baseline: If True (default), also generate a standard-RAG baseline
+            answer per query (full retrieved context, no selection) so token
+            reduction and answer-quality trade-offs are reported. Costs one
+            extra LLM call per query; set False for a faster EARC-only run.
 
     Returns:
         A dict with ``summary`` (aggregate metrics) and ``records``
@@ -251,7 +319,7 @@ def run_evaluation(
     records: List[Dict[str, Any]] = []
     total = len(sampled)
     for i, qa in enumerate(sampled, 1):
-        records.append(evaluate_one(pipe, qa))
+        records.append(evaluate_one(pipe, qa, run_baseline=run_baseline))
         if progress_callback is not None:
             progress_callback(i, total)
 
@@ -263,6 +331,7 @@ def run_evaluation(
             "sample_size": sample_size,
             "requested_datasets": datasets,
             "seed": seed,
+            "run_baseline": run_baseline,
             "generation_backend": CONFIG.get("generation", {}).get("backend"),
         },
     }
