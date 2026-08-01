@@ -77,9 +77,14 @@ class EARCPipeline:
 
         log.info("EARCPipeline ready.")
 
-    def run(self, query: str) -> dict:
+    def run(self, query: str, verbose: bool = False) -> dict:
         """
         Run the complete EARC pipeline.
+
+        If ``verbose`` is True, the generation module prints a formatted report
+        (top evidence in prompt order, answer, backend, verification) to the
+        terminal. Defaults to False so programmatic callers (e.g. the
+        evaluator) are unaffected.
         """
 
         # ---------------------------------------------------------
@@ -108,6 +113,7 @@ class EARCPipeline:
         generation_output = self.generation_pipeline.generate(
             query_info,
             selection_output["selected_sentences"],
+            verbose=verbose,
         )
 
         # ---------------------------------------------------------
@@ -147,14 +153,4 @@ if __name__ == "__main__":
 
     for q in test_queries:
 
-        result = pipe.run(q)
-
-        print(f"\nQuery      : {result['query']}")
-        print(f"Type       : {result['query_info']['query_type']}")
-        print(f"Sentences  : {len(result['sentences'])}")
-        print(f"Selected   : {len(result['selected_sentences'])}")
-        print(f"Answer     : {result['answer']}")
-        print(
-            f"Grounded   : {result['generation']['verification']['grounded']} "
-            f"(faithfulness={result['generation']['verification']['faithfulness']})"
-        )
+        result = pipe.run(q, verbose=True)
