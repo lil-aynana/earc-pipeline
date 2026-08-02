@@ -96,6 +96,10 @@ class EARCPipeline:
         # Layers 1–3 : Retrieval
         # ---------------------------------------------------------
         sentences, query_info = self.retrieval_layer.retrieve(query)
+        # Keep a shallow copy of the full retrieved list before scoring
+        # modifies/removes sentences (needed for standard-RAG baseline which
+        # should use ALL retrieved sentences, not the deduplicated subset).
+        retrieved_sentences = list(sentences)
 
         # ---------------------------------------------------------
         # Layers 4–6 : Scoring
@@ -131,6 +135,7 @@ class EARCPipeline:
             "query_info": query_info,
 
             # Retrieval + Scoring
+            "retrieved_sentences": retrieved_sentences,
             "sentences": scored_sentences,
             "scoring_stats": scoring_output["step_stats"],
 

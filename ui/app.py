@@ -85,26 +85,35 @@ st.markdown("""
 .evidence-marker { font-weight:700; color:#60a5fa; margin-right:8px; }
 .evidence-meta   { font-size:11px; color:#6c7aad; margin-top:4px; }
 
-/* Insights table-like rows */
+/* Insights 2x2 grid cards */
+.insight-card {
+    background: #12161f;
+    border: 1px solid #2a2f3e;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+}
+.insight-card-title {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: #4a6aaa;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #1e2a40;
+    padding-bottom: 6px;
+}
 .insight-row {
     display: flex;
     justify-content: space-between;
-    padding: 6px 0;
-    border-bottom: 1px solid #1e2133;
-    font-size: 13px;
+    padding: 4px 0;
+    font-size: 12.5px;
     color: #c8d0e7;
+    border-bottom: 1px solid #1a1f2e;
 }
 .insight-row:last-child { border-bottom: none; }
 .insight-label { color: #6c7aad; }
 .insight-value { color: #e8eaf6; font-weight: 600; }
-.insight-section-header {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    color: #4a5a8a;
-    margin: 12px 0 4px 0;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -117,21 +126,25 @@ def load_pipeline(llm_model: str):
 
 
 # ── Helper: insight row HTML ──────────────────────────────────────────────────
-def _irow(label: str, value: str) -> str:
-    return (
+def _card(title: str, rows: list[tuple[str, str]]) -> str:
+    """Return HTML for a single insight card."""
+    body = "".join(
         f'<div class="insight-row">'
         f'<span class="insight-label">{label}</span>'
         f'<span class="insight-value">{value}</span>'
         f'</div>'
+        for label, value in rows
+    )
+    return (
+        f'<div class="insight-card">'
+        f'<div class="insight-card-title">{title}</div>'
+        f'{body}'
+        f'</div>'
     )
 
 
-def _isection(title: str) -> str:
-    return f'<div class="insight-section-header">{title}</div>'
-
-
 def _render_insights(result: dict) -> None:
-    """Render the pipeline Insights expander — one section per stage."""
+    """Render the pipeline Insights expander as a 2×2 card grid."""
     query_info      = result.get("query_info", {})
     scoring_stats   = result.get("scoring_stats", {})
     selection_stats = result.get("selection_stats", {}) or {}
@@ -144,66 +157,71 @@ def _render_insights(result: dict) -> None:
     step6 = scoring_stats.get("step6", {})
     budget = selection_stats.get("budget", {})
 
-    # Retrieval numbers
-    n_retrieved     = step4.get("total_embedded", "—")
-    query_type      = query_info.get("query_type", "—")
-    keywords        = ", ".join(query_info.get("keywords", [])) or "—"
+    # Retrieval
+    n_retrieved    = step4.get("total_embedded", "—")
+    query_type     = query_info.get("query_type", "—")
+    keywords       = ", ".join(query_info.get("keywords", [])) or "—"
 
-    # Scoring numbers
-    n_before_dedup  = step6.get("input_sentences", "—")
-    n_after_dedup   = step6.get("output_sentences", "—")
-    n_removed       = step6.get("removed", "—")
-    mean_score      = step5.get("mean_score", "—")
+    # Scoring
+    n_before_dedup = step6.get("input_sentences", "—")
+    n_after_dedup  = step6.get("output_sentences", "—")
+    n_removed      = step6.get("removed", "—")
+    mean_score     = step5.get("mean_score", "—")
 
-    # Selection numbers
-    n_candidates    = len(result.get("candidate_sentences", []))
-    n_selected      = len(result.get("selected_sentences", []))
-    tokens_used     = budget.get("tokens_used", "—")
-    token_budget    = budget.get("budget", "—")
-    bridge_cnt      = budget.get("bridge_selected", "—")
+    # Selection
+    n_selected     = len(result.get("selected_sentences", []))
+    n_leftover     = len(result.get("candidate_sentences", []))
+    tokens_used    = budget.get("tokens_used", "—")
+    token_budget   = budget.get("budget", "—")
+    bridge_cnt     = budget.get("bridge_selected", "—")
 
-    # Eval / timing
-    faithfulness    = verification.get("faithfulness")
-    compression     = (
+    # Evaluation
+    faithfulness   = verification.get("faithfulness")
+    mean_overlap   = verification.get("mean_overlap")
+    compression    = (
         f"{100 * (1 - n_selected / n_before_dedup):.0f}%"
         if isinstance(n_before_dedup, int) and n_before_dedup > 0
         else "—"
     )
 
     with st.expander("🔍 Pipeline Insights", expanded=False):
-        html = ""
+        col1, col2 = st.columns(2)
 
-        # — Retrieval —
-        html += _isection("Retrieval")
-        html += _irow("Query type", query_type)
-        html += _irow("Sentences retrieved", str(n_retrieved))
-        html += _irow("Keywords detected", keywords)
+        with col1:
+            st.markdown(_card("📡 Retrieval", [
+                ("Query type",         query_type),
+                ("Sentences retrieved", str(n_retrieved)),
+                ("Keywords detected",  keywords),
+            ]), unsafe_allow_html=True)
 
-        # — Scoring —
-        html += _isection("Scoring")
-        html += _irow("Sentences entering scoring", str(n_before_dedup))
-        html += _irow("After redundancy removal", str(n_after_dedup))
-        html += _irow("Removed as redundant", str(n_removed))
-        if mean_score != "—":
-            html += _irow("Mean composite score", f"{mean_score:.4f}")
+            st.markdown(_card("✂ Selection  (Layers 7–10)", [
+                ("Candidates in",          str(n_selected + n_leftover)),
+                ("Selected sentences",     str(n_selected)),
+                ("Leftover candidates",    str(n_leftover)),
+                ("Bridge sentences",       str(bridge_cnt)),
+                ("Token budget",           str(token_budget)),
+                ("Tokens used",            str(tokens_used)),
+            ]), unsafe_allow_html=True)
 
-        # — Selection —
-        html += _isection("Selection  (Layers 7 – 10)")
-        html += _irow("Candidate sentences", str(n_candidates + n_selected))
-        html += _irow("Selected sentences", str(n_selected))
-        html += _irow("Leftover candidates", str(n_candidates))
-        html += _irow("Bridge sentences selected", str(bridge_cnt))
-        html += _irow("Token budget (query type)", str(token_budget))
-        html += _irow("Tokens used", str(tokens_used))
+        with col2:
+            score_rows = [
+                ("Sentences entering", str(n_before_dedup)),
+                ("After deduplication", str(n_after_dedup)),
+                ("Removed as redundant", str(n_removed)),
+            ]
+            if mean_score != "—":
+                score_rows.append(("Mean composite score", f"{mean_score:.4f}"))
+            st.markdown(_card("📊 Scoring  (Layers 4–6)", score_rows), unsafe_allow_html=True)
 
-        # — Evaluation —
-        html += _isection("Evaluation")
-        html += _irow("Faithfulness score", f"{faithfulness:.3f}" if faithfulness is not None else "—")
-        html += _irow("Context compression", compression)
-        if latency_ms is not None:
-            html += _irow("End-to-end latency", f"{latency_ms:,.0f} ms")
-
-        st.markdown(html, unsafe_allow_html=True)
+            eval_rows = [
+                ("Exact match",        "— (no gold answer in UI)"),
+                ("F1 score",           "— (no gold answer in UI)"),
+                ("Faithfulness",       f"{faithfulness:.3f}" if faithfulness is not None else "—"),
+                ("Mean overlap",       f"{mean_overlap:.3f}" if mean_overlap is not None else "—"),
+                ("Context compression", compression),
+                ("End-to-end latency", f"{latency_ms:,.0f} ms" if latency_ms is not None else "—"),
+            ]
+            st.markdown(_card("📋 Evaluation", eval_rows), unsafe_allow_html=True)
 
 
 # ── Helper renderers ──────────────────────────────────────────────────────────
@@ -286,7 +304,10 @@ def _render_bot_message(query: str, result: dict, baseline: dict | None) -> None
     # Baseline comparison
     if baseline:
         with st.expander("⚖ Standard RAG vs EARC", expanded=False):
-            retrieved_n = len(result.get("sentences", []))
+            # Use raw retrieved sentences (before redundancy removal) so the
+            # standard-RAG number matches the actual retrieval output (24),
+            # not the deduplicated scoring output (16).
+            retrieved_n = len(result.get("retrieved_sentences", result.get("sentences", [])))
             selected_n  = len(result.get("selected_sentences", []))
             c1, c2 = st.columns(2)
             with c1:
@@ -296,7 +317,7 @@ def _render_bot_message(query: str, result: dict, baseline: dict | None) -> None
             with c2:
                 st.markdown("**Standard RAG (full context)**")
                 st.info(baseline.get("answer", ""))
-                st.caption(f"Scored sentences: {retrieved_n} (no selection)")
+                st.caption(f"Retrieved sentences: {retrieved_n} (no selection/deduplication)")
             if retrieved_n:
                 reduction = 100.0 * (retrieved_n - selected_n) / retrieved_n
                 st.metric("Sentence-count reduction", f"{reduction:.0f}%")
@@ -389,9 +410,11 @@ def main() -> None:
     baseline = None
     if show_baseline:
         with st.spinner("Generating standard-RAG baseline…"):
+            # Pass ALL retrieved sentences (pre-deduplication) so the
+            # baseline uses the same context size as true standard RAG.
             baseline = pipe.generation_pipeline.generate_baseline(
                 result.get("query_info", {}),
-                result.get("sentences", []),
+                result.get("retrieved_sentences", result.get("sentences", [])),
             )
 
     _render_bot_message(query, result, baseline)
