@@ -16,8 +16,8 @@ class GenerationPipeline:
     citation-tagged answer.
     """
 
-    def __init__(self, backend: Optional[str] = None):
-        self.generator = AnswerGenerator(backend=backend)
+    def __init__(self, backend: Optional[str] = None, model: Optional[str] = None):
+        self.generator = AnswerGenerator(backend=backend, model=model)
 
     def generate(
         self,

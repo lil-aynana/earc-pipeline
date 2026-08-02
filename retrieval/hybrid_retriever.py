@@ -139,5 +139,6 @@ class HybridRetriever:
                 'dataset'    : meta.get('dataset', ''),
                 'title'      : meta.get('title', ''),
                 'year'       : meta.get('year', None),
+                'char_start' : meta.get('char_start', None),
             })
         return results

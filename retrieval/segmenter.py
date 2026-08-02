@@ -21,6 +21,8 @@ Key design decisions:
 import logging
 import re
 import time
+from bisect import bisect_right
+from collections import defaultdict
 from typing import Dict, List, Optional
 
 import spacy
@@ -37,6 +39,19 @@ from retrieval.sentence_object import SentenceObject
 log = logging.getLogger('EARC-M1')
 
 _WHITESPACE_RE = re.compile(r'\s+')
+
+# A sentence that does not end in one of these is very likely a chunk-boundary
+# cut ("...the first generation iPhone was") rather than a real sentence end.
+_TERMINAL_PUNCT = ('.', '!', '?', '…', '"', "'", ')', ']')
+
+# Minimum suffix/prefix character overlap for two consecutive chunks of the same
+# document to be considered adjacent (they share ~chunk_overlap chars by design).
+# Kept comfortably below the builder's chunk_overlap (100) to tolerate the
+# whitespace stripping applied when chunks were created.
+_MIN_STITCH_OVERLAP = 20
+
+# Cap the suffix/prefix scan window (chars) so stitching stays O(n) per pair.
+_MAX_STITCH_SCAN = 400
 
 
 # ── Text utilities ─────────────────────────────────────────────────────────────
@@ -55,6 +70,104 @@ def _is_fragment(text: str) -> bool:
     if not text:
         return True
     return text[0] in FRAGMENT_START_CHARS
+
+
+def _is_truncated_tail(text: str) -> bool:
+    """
+    True if a sentence looks cut off at the end (no terminal punctuation).
+
+    After chunk stitching this should only ever fire on the final sentence of a
+    reconstructed segment — i.e. a genuine edge of the retrieved context where
+    the continuation was never retrieved and therefore cannot be recovered.
+    """
+    if not text:
+        return True
+    return not text.endswith(_TERMINAL_PUNCT)
+
+
+def _suffix_prefix_overlap(a: str, b: str) -> int:
+    """
+    Longest overlap length k such that a[-k:] == b[:k].
+
+    Used to splice two consecutive chunks of the same document back together
+    without duplicating their shared (chunk_overlap) region. Returns 0 if no
+    overlap of at least ``_MIN_STITCH_OVERLAP`` chars is found.
+    """
+    max_k = min(len(a), len(b), _MAX_STITCH_SCAN)
+    for k in range(max_k, _MIN_STITCH_OVERLAP - 1, -1):
+        if a[-k:] == b[:k]:
+            return k
+    return 0
+
+
+def _stitch_chunks(chunks: List[Dict]) -> List[Dict]:
+    """
+    Reconstruct contiguous document text from overlapping retrieved chunks.
+
+    Chunks were produced by a character-based splitter (chunk_size=800,
+    chunk_overlap=100), which cuts sentences at chunk boundaries. Here we group
+    chunks by document, order them by original position, and splice adjacent
+    chunks together (removing their shared overlap) so that sentences spanning a
+    boundary are reassembled whole before segmentation.
+
+    Returns a list of "segments", each a dict:
+        {
+          "text":       reconstructed text,
+          "boundaries": [(char_offset_in_text, source_chunk), ...]  # ascending
+        }
+    ``boundaries`` lets each resulting sentence be attributed back to the chunk
+    it originated from (for rank/score metadata).
+    """
+    grouped: Dict = defaultdict(list)
+    for ch in chunks:
+        grouped[(ch.get('dataset', ''), ch.get('doc_id', ''))].append(ch)
+
+    segments: List[Dict] = []
+    for group in grouped.values():
+        # Order by original document position. char_start is exact; fall back to
+        # the globally-sequential chunk_idx when it is unavailable.
+        group_sorted = sorted(
+            group,
+            key=lambda c: (
+                c.get('char_start')
+                if c.get('char_start') is not None
+                else c.get('chunk_idx', 0)
+            ),
+        )
+
+        for ch in group_sorted:
+            text = ch.get('chunk_text') or ''
+            if not text:
+                continue
+
+            if not segments or segments[-1].get('_doc') != (
+                ch.get('dataset', ''), ch.get('doc_id', '')
+            ):
+                segments.append({
+                    'text': text,
+                    'boundaries': [(0, ch)],
+                    '_doc': (ch.get('dataset', ''), ch.get('doc_id', '')),
+                })
+                continue
+
+            seg = segments[-1]
+            k = _suffix_prefix_overlap(seg['text'], text)
+            if k >= _MIN_STITCH_OVERLAP:
+                piece = text[k:]
+                if piece:  # skip fully-duplicated chunks
+                    seg['boundaries'].append((len(seg['text']), ch))
+                    seg['text'] += piece
+            else:
+                # No detectable overlap => a gap between retrieved chunks; start
+                # a fresh segment so unrelated text is not concatenated.
+                segments.append({
+                    'text': text,
+                    'boundaries': [(0, ch)],
+                    '_doc': (ch.get('dataset', ''), ch.get('doc_id', '')),
+                })
+
+    return segments
+
 
 
 def _approx_tokens(text: str) -> int:
@@ -129,22 +242,32 @@ def segment_to_sentences(
     t0 = time.time()
     nlp = get_nlp()
 
-    # Batch all chunk texts through spaCy in one pass.
+    # Stitch overlapping chunks back into contiguous document segments so that
+    # sentences cut across chunk boundaries are reassembled before segmentation.
+    segments = _stitch_chunks(retrieved_chunks)
+
+    # Batch all reconstructed segment texts through spaCy in one pass.
     # Keep parser (en_core_web_sm uses it for .sents, not a standalone senter).
     # Disable NER — not needed at segmentation stage.
-    chunk_texts = [chunk['chunk_text'] for chunk in retrieved_chunks]
-    spacy_docs  = list(nlp.pipe(
-        chunk_texts,
+    segment_texts = [seg['text'] for seg in segments]
+    spacy_docs    = list(nlp.pipe(
+        segment_texts,
         batch_size=SPACY_BATCH_SIZE,
         disable=['ner'],
     ))
 
     results     : List[SentenceObject] = []
     n_fragments = 0
+    n_truncated = 0
     n_too_short = 0
     n_too_long  = 0
 
-    for chunk, spacy_doc in zip(retrieved_chunks, spacy_docs):
+    for seg, spacy_doc in zip(segments, spacy_docs):
+        # Ascending char offsets marking where each source chunk's content begins
+        # within the reconstructed segment (for per-sentence metadata attribution).
+        boundaries    = seg['boundaries']
+        boundary_offs = [off for off, _ in boundaries]
+
         for sent_idx, sent in enumerate(spacy_doc.sents):
             text = _clean(sent.text)
             if not text:
@@ -154,6 +277,12 @@ def segment_to_sentences(
                 n_fragments += 1
                 continue
 
+            # After stitching, a truncated tail means the continuation was never
+            # retrieved (true context edge) — only then do we drop it.
+            if _is_truncated_tail(text):
+                n_truncated += 1
+                continue
+
             tok_count = _approx_tokens(text)
             if tok_count < min_tokens:
                 n_too_short += 1
@@ -161,6 +290,13 @@ def segment_to_sentences(
             if tok_count > max_tokens:
                 n_too_long += 1
                 continue
+
+            # Attribute this sentence to the source chunk whose content region
+            # contains the sentence's start offset.
+            b_idx = bisect_right(boundary_offs, sent.start_char) - 1
+            if b_idx < 0:
+                b_idx = 0
+            chunk = boundaries[b_idx][1]
 
             # Extract the sentence span as its own Doc for lemma-based keyword matching.
             # Using the already-computed spacy_doc avoids redundant full-pipeline calls.
@@ -196,9 +332,9 @@ def segment_to_sentences(
 
     t_seg = time.time() - t0
     log.info(
-        'Segmentation: %d sentences from %d chunks in %.3fs '
-        '(dropped: %d fragments, %d too short, %d too long)',
-        len(results), len(retrieved_chunks), t_seg,
-        n_fragments, n_too_short, n_too_long,
+        'Segmentation: %d sentences from %d chunks (%d stitched segments) in %.3fs '
+        '(dropped: %d fragments, %d truncated, %d too short, %d too long)',
+        len(results), len(retrieved_chunks), len(segments), t_seg,
+        n_fragments, n_truncated, n_too_short, n_too_long,
     )
     return results

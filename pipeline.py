@@ -47,6 +47,8 @@ class EARCPipeline:
         chunks_dir: Path = CHUNKS_DIR,
         metadata_dir: Path = METADATA_DIR,
         embed_model_name: str = EMBED_MODEL,
+        backend: str | None = None,
+        llm_model: str | None = None,
     ):
 
         (
@@ -73,7 +75,7 @@ class EARCPipeline:
         )
 
         # Module 4
-        self.generation_pipeline = GenerationPipeline()
+        self.generation_pipeline = GenerationPipeline(backend=backend, model=llm_model)
 
         log.info("EARCPipeline ready.")
 

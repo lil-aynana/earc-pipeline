@@ -40,9 +40,12 @@ _NEGATION_CUES = (
 class AnswerGenerator:
     """Layer 12 — pluggable answer generation."""
 
-    def __init__(self, backend: Optional[str] = None):
+    def __init__(self, backend: Optional[str] = None, model: Optional[str] = None):
         gen_cfg = CONFIG.get("generation", {})
         self.backend = (backend or gen_cfg.get("backend", "extractive")).lower()
+        # Optional LLM model override (e.g. "mistral" instead of the config
+        # default "llama3"). Applies to the ollama backend; None => use config.
+        self.model = model
         self._hf_pipeline = None  # lazily initialised transformers pipeline
 
     # ── public API ────────────────────────────────────────────────────────
@@ -201,7 +204,7 @@ class AnswerGenerator:
 
         url = CONFIG.get("ollama_url", "http://localhost:11434/api/generate")
         payload = {
-            "model": CONFIG.get("llm_model", "llama3"),
+            "model": self.model or CONFIG.get("llm_model", "llama3"),
             "prompt": prompt,
             "stream": False,
             "options": {"temperature": CONFIG.get("temperature", 0)},

@@ -264,7 +264,7 @@ def verify(
     )
 
     return {
-        "grounded": bool(scored_sentences) and not unsupported,
+        "grounded": bool(scored_sentences) and not unsupported and not invalid_markers,
         "faithfulness": round(faithfulness, 4),
         "mean_overlap": round(mean_overlap, 4),
         "supported_sentences": supported,

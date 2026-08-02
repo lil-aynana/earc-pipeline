@@ -353,9 +353,15 @@ class ReasoningChainGraph:
                         queue.append(neighbour)
 
             if found_sink is not None:
-                # Reconstruct path and mark
-                node: int | None = found_sink
-                while node is not None:
+                # Reconstruct the path but mark only STRICTLY INTERMEDIATE
+                # nodes as bridges. The endpoints (``src`` and ``found_sink``)
+                # are themselves query-matching source nodes, not connectors;
+                # including them made almost every sentence a "bridge" in a
+                # mono-topic retrieved set (where most nodes match the query).
+                # A true bridge is a sentence that lies *between* two
+                # query-relevant sentences.
+                node = predecessors[found_sink]
+                while node is not None and node != src:
                     bridge.add(node)
                     node = predecessors[node]
 
