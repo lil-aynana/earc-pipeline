@@ -85,13 +85,18 @@ st.markdown("""
 .evidence-marker { font-weight:700; color:#60a5fa; margin-right:8px; }
 .evidence-meta   { font-size:11px; color:#6c7aad; margin-top:4px; }
 
-/* Insights 2x2 grid cards */
+/* Insights 2×2 CSS grid */
+.insight-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    width: 100%;
+}
 .insight-card {
     background: #12161f;
     border: 1px solid #2a2f3e;
     border-radius: 12px;
     padding: 14px 16px;
-    margin-bottom: 12px;
 }
 .insight-card-title {
     font-size: 10px;
@@ -184,44 +189,44 @@ def _render_insights(result: dict) -> None:
         else "—"
     )
 
+    score_rows = [
+        ("Sentences entering", str(n_before_dedup)),
+        ("After deduplication", str(n_after_dedup)),
+        ("Removed as redundant", str(n_removed)),
+    ]
+    if mean_score != "—":
+        score_rows.append(("Mean composite score", f"{mean_score:.4f}"))
+
+    eval_rows = [
+        ("Exact match",         "— (needs gold answer)"),
+        ("F1 score",            "— (needs gold answer)"),
+        ("Faithfulness",        f"{faithfulness:.3f}" if faithfulness is not None else "—"),
+        ("Mean overlap",        f"{mean_overlap:.3f}" if mean_overlap is not None else "—"),
+        ("Context compression", compression),
+        ("End-to-end latency",  f"{latency_ms:,.0f} ms" if latency_ms is not None else "—"),
+    ]
+
+    grid_html = f"""
+<div class="insight-grid">
+  {_card("📡 Retrieval", [
+      ("Query type", query_type),
+      ("Sentences retrieved", str(n_retrieved)),
+      ("Keywords detected", keywords),
+  ])}
+  {_card("📊 Scoring (Layers 4–6)", score_rows)}
+  {_card("✂ Selection (Layers 7–10)", [
+      ("Candidates in",       str(n_selected + n_leftover)),
+      ("Selected sentences",  str(n_selected)),
+      ("Leftover candidates", str(n_leftover)),
+      ("Bridge sentences",    str(bridge_cnt)),
+      ("Token budget",        str(token_budget)),
+      ("Tokens used",         str(tokens_used)),
+  ])}
+  {_card("📋 Evaluation", eval_rows)}
+</div>
+"""
     with st.expander("🔍 Pipeline Insights", expanded=False):
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown(_card("📡 Retrieval", [
-                ("Query type",         query_type),
-                ("Sentences retrieved", str(n_retrieved)),
-                ("Keywords detected",  keywords),
-            ]), unsafe_allow_html=True)
-
-            st.markdown(_card("✂ Selection  (Layers 7–10)", [
-                ("Candidates in",          str(n_selected + n_leftover)),
-                ("Selected sentences",     str(n_selected)),
-                ("Leftover candidates",    str(n_leftover)),
-                ("Bridge sentences",       str(bridge_cnt)),
-                ("Token budget",           str(token_budget)),
-                ("Tokens used",            str(tokens_used)),
-            ]), unsafe_allow_html=True)
-
-        with col2:
-            score_rows = [
-                ("Sentences entering", str(n_before_dedup)),
-                ("After deduplication", str(n_after_dedup)),
-                ("Removed as redundant", str(n_removed)),
-            ]
-            if mean_score != "—":
-                score_rows.append(("Mean composite score", f"{mean_score:.4f}"))
-            st.markdown(_card("📊 Scoring  (Layers 4–6)", score_rows), unsafe_allow_html=True)
-
-            eval_rows = [
-                ("Exact match",        "— (no gold answer in UI)"),
-                ("F1 score",           "— (no gold answer in UI)"),
-                ("Faithfulness",       f"{faithfulness:.3f}" if faithfulness is not None else "—"),
-                ("Mean overlap",       f"{mean_overlap:.3f}" if mean_overlap is not None else "—"),
-                ("Context compression", compression),
-                ("End-to-end latency", f"{latency_ms:,.0f} ms" if latency_ms is not None else "—"),
-            ]
-            st.markdown(_card("📋 Evaluation", eval_rows), unsafe_allow_html=True)
+        st.markdown(grid_html, unsafe_allow_html=True)
 
 
 # ── Helper renderers ──────────────────────────────────────────────────────────
