@@ -5,11 +5,41 @@ All tunable parameters and closed linguistic sets for Module 1.
 Every other retrieval file imports from here — never hardcode values elsewhere.
 """
 
+import os
 from pathlib import Path
 
-# ── Corpus artifact paths (override in pipeline.py for non-Colab environments) ──
+# ── Corpus artifact paths ─────────────────────────────────────────────────────
+#
+# Resolution order (first path that exists wins):
+#   1. EARC_DATA_DIR environment variable  (set this for any custom location)
+#   2. <repo-root>/data/RAG_Project        (local dev on any OS)
+#   3. /content/drive/MyDrive/RAG_Project  (Google Colab)
+#
+# For Windows local setup: place the RAG_Project folder at
+#   earc-pipeline\data\RAG_Project
+# and this will be picked up automatically with no code changes.
+# ──────────────────────────────────────────────────────────────────────────────
 
-DRIVE_BASE   = Path('/content/drive/MyDrive/RAG_Project')
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+def _resolve_data_dir() -> Path:
+    # 1. Explicit env var override
+    env = os.environ.get("EARC_DATA_DIR")
+    if env:
+        p = Path(env)
+        if p.exists():
+            return p
+
+    # 2. Local: data/RAG_Project inside the repo
+    local = _REPO_ROOT / "data" / "RAG_Project"
+    if local.exists():
+        return local
+
+    # 3. Colab fallback
+    return Path("/content/drive/MyDrive/RAG_Project")
+
+
+DRIVE_BASE   = _resolve_data_dir()
 FAISS_PATH   = DRIVE_BASE / 'faiss.index'
 BM25_PATH    = DRIVE_BASE / 'bm25.pkl'
 CHUNKS_DIR   = DRIVE_BASE / 'chunks'
