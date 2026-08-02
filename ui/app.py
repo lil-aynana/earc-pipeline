@@ -58,16 +58,6 @@ st.markdown("""
 }
 .chat-wrap { overflow: hidden; margin-bottom: 4px; }
 
-/* Subtle section label inside bot bubble */
-.section-label {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    color: #6c7aad;
-    margin: 14px 0 4px 0;
-}
-
 /* Pill badges */
 .pill {
     display: inline-block;
@@ -92,29 +82,28 @@ st.markdown("""
     font-size: 13px;
     color: #c8d0e7;
 }
-.evidence-marker {
-    font-weight: 700;
-    color: #60a5fa;
-    margin-right: 8px;
-}
-.evidence-meta {
-    font-size: 11px;
-    color: #6c7aad;
-    margin-top: 4px;
-}
+.evidence-marker { font-weight:700; color:#60a5fa; margin-right:8px; }
+.evidence-meta   { font-size:11px; color:#6c7aad; margin-top:4px; }
 
-/* Input area */
-[data-testid="stTextInput"] input {
-    background: #1e2133 !important;
-    color: #e8eaf6 !important;
-    border: 1px solid #2a2f3e !important;
-    border-radius: 24px !important;
-    padding: 10px 20px !important;
-    font-size: 15px !important;
+/* Insights table-like rows */
+.insight-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid #1e2133;
+    font-size: 13px;
+    color: #c8d0e7;
 }
-[data-testid="stTextInput"] input:focus {
-    border-color: #1e6ef5 !important;
-    box-shadow: 0 0 0 2px rgba(30,110,245,.25) !important;
+.insight-row:last-child { border-bottom: none; }
+.insight-label { color: #6c7aad; }
+.insight-value { color: #e8eaf6; font-weight: 600; }
+.insight-section-header {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: #4a5a8a;
+    margin: 12px 0 4px 0;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -122,9 +111,99 @@ st.markdown("""
 
 # ── Pipeline cache ────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Loading EARC pipeline…")
-def load_pipeline(backend: str, llm_model: str):
+def load_pipeline(llm_model: str):
     from pipeline import EARCPipeline
-    return EARCPipeline(backend=backend, llm_model=llm_model or None)
+    return EARCPipeline(backend="ollama", llm_model=llm_model or None)
+
+
+# ── Helper: insight row HTML ──────────────────────────────────────────────────
+def _irow(label: str, value: str) -> str:
+    return (
+        f'<div class="insight-row">'
+        f'<span class="insight-label">{label}</span>'
+        f'<span class="insight-value">{value}</span>'
+        f'</div>'
+    )
+
+
+def _isection(title: str) -> str:
+    return f'<div class="insight-section-header">{title}</div>'
+
+
+def _render_insights(result: dict) -> None:
+    """Render the pipeline Insights expander — one section per stage."""
+    query_info      = result.get("query_info", {})
+    scoring_stats   = result.get("scoring_stats", {})
+    selection_stats = result.get("selection_stats", {}) or {}
+    generation      = result.get("generation", {}) or {}
+    verification    = generation.get("verification", {}) or {}
+    latency_ms      = result.get("latency_ms")
+
+    step4 = scoring_stats.get("step4", {})
+    step5 = scoring_stats.get("step5", {})
+    step6 = scoring_stats.get("step6", {})
+    budget = selection_stats.get("budget", {})
+
+    # Retrieval numbers
+    n_retrieved     = step4.get("total_embedded", "—")
+    query_type      = query_info.get("query_type", "—")
+    keywords        = ", ".join(query_info.get("keywords", [])) or "—"
+
+    # Scoring numbers
+    n_before_dedup  = step6.get("input_sentences", "—")
+    n_after_dedup   = step6.get("output_sentences", "—")
+    n_removed       = step6.get("removed", "—")
+    mean_score      = step5.get("mean_score", "—")
+
+    # Selection numbers
+    n_candidates    = len(result.get("candidate_sentences", []))
+    n_selected      = len(result.get("selected_sentences", []))
+    tokens_used     = budget.get("tokens_used", "—")
+    token_budget    = budget.get("budget", "—")
+    bridge_cnt      = budget.get("bridge_selected", "—")
+
+    # Eval / timing
+    faithfulness    = verification.get("faithfulness")
+    compression     = (
+        f"{100 * (1 - n_selected / n_before_dedup):.0f}%"
+        if isinstance(n_before_dedup, int) and n_before_dedup > 0
+        else "—"
+    )
+
+    with st.expander("🔍 Pipeline Insights", expanded=False):
+        html = ""
+
+        # — Retrieval —
+        html += _isection("Retrieval")
+        html += _irow("Query type", query_type)
+        html += _irow("Sentences retrieved", str(n_retrieved))
+        html += _irow("Keywords detected", keywords)
+
+        # — Scoring —
+        html += _isection("Scoring")
+        html += _irow("Sentences entering scoring", str(n_before_dedup))
+        html += _irow("After redundancy removal", str(n_after_dedup))
+        html += _irow("Removed as redundant", str(n_removed))
+        if mean_score != "—":
+            html += _irow("Mean composite score", f"{mean_score:.4f}")
+
+        # — Selection —
+        html += _isection("Selection  (Layers 7 – 10)")
+        html += _irow("Candidate sentences", str(n_candidates + n_selected))
+        html += _irow("Selected sentences", str(n_selected))
+        html += _irow("Leftover candidates", str(n_candidates))
+        html += _irow("Bridge sentences selected", str(bridge_cnt))
+        html += _irow("Token budget (query type)", str(token_budget))
+        html += _irow("Tokens used", str(tokens_used))
+
+        # — Evaluation —
+        html += _isection("Evaluation")
+        html += _irow("Faithfulness score", f"{faithfulness:.3f}" if faithfulness is not None else "—")
+        html += _irow("Context compression", compression)
+        if latency_ms is not None:
+            html += _irow("End-to-end latency", f"{latency_ms:,.0f} ms")
+
+        st.markdown(html, unsafe_allow_html=True)
 
 
 # ── Helper renderers ──────────────────────────────────────────────────────────
@@ -185,9 +264,12 @@ def _render_bot_message(query: str, result: dict, baseline: dict | None) -> None
     html += "</div></div>"
     st.markdown(html, unsafe_allow_html=True)
 
-    # Evidence
+    # Evidence — LLM-cited sentences
     if citations:
-        with st.expander(f"📄 Evidence — {len(citations)} sentence(s) in citation order", expanded=False):
+        with st.expander(
+            f"📄 Evidence — {len(citations)} cited / {n_selected} selected sentences",
+            expanded=False,
+        ):
             for c in citations:
                 score = round(float(c.get("score", 0.0) or 0.0), 4)
                 bridge = "bridge" if c.get("is_bridge") else ""
@@ -210,14 +292,17 @@ def _render_bot_message(query: str, result: dict, baseline: dict | None) -> None
             with c1:
                 st.markdown("**EARC (compressed)**")
                 st.info(answer)
-                st.caption(f"Context sentences: {selected_n}")
+                st.caption(f"Selected sentences: {selected_n} (after 13-layer pipeline)")
             with c2:
                 st.markdown("**Standard RAG (full context)**")
                 st.info(baseline.get("answer", ""))
-                st.caption(f"Context sentences: {retrieved_n}")
+                st.caption(f"Scored sentences: {retrieved_n} (no selection)")
             if retrieved_n:
                 reduction = 100.0 * (retrieved_n - selected_n) / retrieved_n
                 st.metric("Sentence-count reduction", f"{reduction:.0f}%")
+
+    # Pipeline Insights
+    _render_insights(result)
 
     # Full LLM prompt
     with st.expander("🔬 Full LLM prompt", expanded=False):
@@ -232,22 +317,22 @@ def main() -> None:
         st.caption("Evidence-Aware Retrieval & Compression")
         st.divider()
 
-        backend = st.selectbox(
-            "Generation backend",
-            options=["ollama", "extractive", "transformers", "openai"],
+        st.markdown("**LLM Model**")
+        llm_model = st.radio(
+            "llm_model_radio",
+            options=["llama3", "mistral"],
             index=0,
+            horizontal=True,
+            label_visibility="collapsed",
+            help="Model must be pulled in Ollama first  (ollama pull llama3 / mistral).",
         )
-        model = st.text_input(
-            "Ollama model",
-            value="llama3",
-            disabled=backend != "ollama",
-            help="e.g. 'llama3' or 'mistral'",
-        )
+        st.caption(f"Active: `{llm_model}` via Ollama")
+
         st.divider()
         show_baseline = st.checkbox(
             "Compare with standard RAG",
             value=False,
-            help="Doubles LLM calls. Adds a side-by-side comparison inside each response.",
+            help="Side-by-side token/quality comparison. Doubles LLM calls.",
         )
         st.divider()
         if st.button("🗑 Clear chat"):
@@ -282,20 +367,11 @@ def main() -> None:
         )
         _render_bot_message(turn["query"], turn["result"], turn.get("baseline"))
 
-    # ── Input row ─────────────────────────────────────────────────────────
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-    with st.form(key="chat_form", clear_on_submit=True):
-        col_input, col_btn = st.columns([9, 1])
-        with col_input:
-            query = st.text_input(
-                label="query",
-                placeholder="Ask a question…",
-                label_visibility="collapsed",
-            )
-        with col_btn:
-            submitted = st.form_submit_button("Send", use_container_width=True)
+    # ── Bottom-pinned input (Streamlit native) ────────────────────────────
+    # st.chat_input() is automatically rendered at the bottom of the page.
+    query = st.chat_input(f"Ask a question… ({llm_model})")
 
-    if not submitted or not query.strip():
+    if not query or not query.strip():
         return
 
     # Show user bubble immediately
@@ -304,7 +380,8 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    pipe = load_pipeline(backend, model if backend == "ollama" else "")
+    # Always use ollama backend with the selected model
+    pipe = load_pipeline(llm_model)
 
     with st.spinner("Thinking…"):
         result = pipe.run(query)

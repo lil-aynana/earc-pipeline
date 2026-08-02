@@ -5,6 +5,7 @@ EARC Pipeline — top-level entry point.
 """
 
 import logging
+import time
 from pathlib import Path
 
 from retrieval.loader import load_corpus_artifacts
@@ -89,6 +90,8 @@ class EARCPipeline:
         evaluator) are unaffected.
         """
 
+        t0 = time.perf_counter()
+
         # ---------------------------------------------------------
         # Layers 1–3 : Retrieval
         # ---------------------------------------------------------
@@ -118,6 +121,8 @@ class EARCPipeline:
             verbose=verbose,
         )
 
+        latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+
         # ---------------------------------------------------------
         # Final Output
         # ---------------------------------------------------------
@@ -137,22 +142,27 @@ class EARCPipeline:
             # Generation
             "answer": generation_output["answer"],
             "generation": generation_output,
+
+            # Timing
+            "latency_ms": latency_ms,
         }
 
 
 # -------------------------------------------------------------
-# CLI smoke test
+# CLI entry point
 # -------------------------------------------------------------
 if __name__ == "__main__":
+    import argparse
 
-    pipe = EARCPipeline()
+    parser = argparse.ArgumentParser(description="Run a single query through the EARC pipeline.")
+    parser.add_argument("query", nargs="?", help="Question to ask (omit to read from stdin)")
+    parser.add_argument("--model", default=None, help="Ollama model name (default: from config)")
+    args = parser.parse_args()
 
-    test_queries = [
-        "Who invented the telephone?",
-        "What did Marie Curie and Albert Einstein both contribute to physics?",
-        "What countries are not members of NATO?",
-    ]
+    query = args.query or input("Query: ").strip()
+    if not query:
+        parser.error("No query provided.")
 
-    for q in test_queries:
-
-        result = pipe.run(q, verbose=True)
+    pipe = EARCPipeline(llm_model=args.model)
+    result = pipe.run(query, verbose=True)
+    print(f"\nLatency: {result['latency_ms']} ms")
