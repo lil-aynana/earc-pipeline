@@ -93,7 +93,7 @@ def _field(s: Any, name: str, default: Any = "") -> Any:
 def _retrieved_token_count(result: Dict[str, Any]) -> int:
     """Total whitespace tokens across all scored (retrieved) sentences."""
     total = 0
-    for s in result.get("sentences", []):
+    for s in result.get("retrieved_sentences", result.get("sentences", [])):
         tc = _field(s, "token_count", None)
         if tc is None:
             tc = metrics.token_count(_field(s, "text", ""))
@@ -203,7 +203,7 @@ def evaluate_one(pipe: Any, qa: Dict[str, Any], run_baseline: bool = True) -> Di
             b_start = time.perf_counter()
             b_gen = pipe.generation_pipeline.generate_baseline(
                 result.get("query_info", {}),
-                result.get("sentences", []),
+                result.get("retrieved_sentences", result.get("sentences", [])),
             )
             b_latency = time.perf_counter() - b_start
             b_answer = b_gen.get("answer", "")

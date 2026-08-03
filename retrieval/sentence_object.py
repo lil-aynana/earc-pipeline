@@ -55,6 +55,18 @@ class SentenceObject:
     is_bridge             : bool = False   # Module 3 sets this
     force_include         : bool = False   # Module 3 sets this
 
+    # ── Per-sentence query coverage (Layer 10 uses these) ────────────────────────
+    # Lists of the query's entities/keywords that this sentence actually covers.
+    # Populated by the segmenter; empty lists mean "no coverage" (safe default).
+    sentence_entities     : list = None    # set in segmenter
+    sentence_keywords     : list = None    # set in segmenter
+
+    def __post_init__(self):
+        if self.sentence_entities is None:
+            self.sentence_entities = []
+        if self.sentence_keywords is None:
+            self.sentence_keywords = []
+
     # ── Module 2 handoff ─────────────────────────────────────────────────────────
 
     def to_m2_dict(self) -> dict:
@@ -105,6 +117,10 @@ class SentenceObject:
             'score'                : 0.0,     # Module 2 fills this
             'is_bridge'            : False,   # Module 3 sets this
             'force_include'        : self.force_include,
+            # Layer 10 (evidence_sufficiency) requires these fields on every sentence.
+            # They contain the subset of query entities/keywords this sentence covers.
+            'entities'             : list(self.sentence_entities),
+            'keywords'             : list(self.sentence_keywords),
         }
 
     def __repr__(self) -> str:

@@ -306,6 +306,18 @@ def segment_to_sentences(
                 text, query_entities, query_keywords, sent_span_doc
             )
 
+            # Compute per-sentence entity/keyword coverage for Layer 10.
+            s_lower = text.lower()
+            matched_entities = [e for e in query_entities if e and e.lower() in s_lower]
+            if query_keywords and sent_span_doc is not None:
+                sent_lemmas = {
+                    t.lemma_.lower() for t in sent_span_doc
+                    if not t.is_punct and not t.is_space
+                }
+                matched_keywords = [kw for kw in query_keywords if kw in sent_lemmas]
+            else:
+                matched_keywords = []
+
             # Stable sentence ID: dataset:doc_id:chunk_idx:sent_idx
             sentence_id = (
                 f"{chunk['dataset']}:{chunk['doc_id']}"
@@ -328,6 +340,8 @@ def segment_to_sentences(
                 embedding             = None,        # Module 2 fills this
                 contains_query_entity = has_entity,
                 token_count           = tok_count,
+                sentence_entities     = matched_entities,
+                sentence_keywords     = matched_keywords,
             ))
 
     t_seg = time.time() - t0

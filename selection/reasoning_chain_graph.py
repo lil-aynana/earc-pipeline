@@ -247,11 +247,7 @@ class ReasoningChainGraph:
                 "total_sentences": len(sentences),
                 "bridge_nodes": bridge_count,
                 "non_bridge_nodes": len(sentences) - bridge_count,
-            }
-        }
-        
-        return {
-            "sentences": sentences,
+                    "has_bridge_sentence": bridge_count > 0,
             "stats": stats,
         } 
 
