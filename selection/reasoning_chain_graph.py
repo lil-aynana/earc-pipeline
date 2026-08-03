@@ -247,9 +247,14 @@ class ReasoningChainGraph:
                 "total_sentences": len(sentences),
                 "bridge_nodes": bridge_count,
                 "non_bridge_nodes": len(sentences) - bridge_count,
-                    "has_bridge_sentence": bridge_count > 0,
+                "has_bridge_sentence": bridge_count > 0,
+            }
+        }
+
+        return {
+            "sentences": sentences,
             "stats": stats,
-        } 
+        }
 
     # ------------------------------------------------------------------
     # Private helpers
