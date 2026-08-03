@@ -113,8 +113,11 @@ def _selected_token_count(result: Dict[str, Any]) -> int:
 
 
 def _retrieved_texts(result: Dict[str, Any]) -> str:
-    """Concatenate all scored (retrieved) sentence texts into one string."""
-    return " ".join(str(_field(s, "text", "")) for s in result.get("sentences", []))
+    """Concatenate all retrieved sentence texts into one string."""
+    return " ".join(
+        str(_field(s, "text", ""))
+        for s in result.get("retrieved_sentences", result.get("sentences", []))
+    )
 
 
 def _selected_texts(result: Dict[str, Any]) -> str:
