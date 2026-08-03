@@ -217,7 +217,17 @@ class ReasoningChainGraph:
             ValueError: If any sentence is missing a required field.
         """
         if not sentences:
-            return sentences
+            return {
+                "sentences": [],
+                "stats": {
+                    "reasoning": {
+                        "total_sentences": 0,
+                        "bridge_nodes": 0,
+                        "non_bridge_nodes": 0,
+                        "has_bridge_sentence": False,
+                    }
+                },
+            }
 
         
         # Make a deep copy so Layer 6 output remains unchanged

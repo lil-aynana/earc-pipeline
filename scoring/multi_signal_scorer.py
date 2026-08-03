@@ -105,9 +105,9 @@ class MultiSignalScorer:
             "query_type": query_type,
             "weights": weights,
             "total_scored": len(sentences),
-            "max_score": round(max(scores), 4),
-            "min_score": round(min(scores), 4),
-            "mean_score": round(float(np.mean(scores)), 4),
+            "max_score": round(max(scores), 4) if scores else 0.0,
+            "min_score": round(min(scores), 4) if scores else 0.0,
+            "mean_score": round(float(np.mean(scores)), 4) if scores else 0.0,
             "top3": [s['text'][:60] for s in sorted(sentences, key=lambda x: x['score'], reverse=True)[:3]],
         }
         print("\n=== STEP 5 OUTPUT ===")
